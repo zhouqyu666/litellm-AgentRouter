@@ -223,9 +223,23 @@ class TestValidatePrereqs:
             "litellm": MagicMock(),
             "litellm.proxy": MagicMock(),
             "litellm.proxy.proxy_cli": MagicMock(),
-        }), patch("shutil.which", return_value=None):
+        }), patch("shutil.which", return_value=None), patch("socket.gethostbyname") as mock_socket:
+            # Simulate no external node-proxy service
+            import socket
+            mock_socket.side_effect = socket.gaierror("Name or service not known")
             with pytest.raises(SystemExit):
                 validate_prereqs()
+
+    def test_validate_prereqs_docker_compose_mode(self):
+        """Test validate_prereqs skips Node.js check when external node-proxy service is available."""
+        with patch.dict("sys.modules", {
+            "litellm": MagicMock(),
+            "litellm.proxy": MagicMock(),
+            "litellm.proxy.proxy_cli": MagicMock(),
+        }), patch("shutil.which", return_value=None), patch("socket.gethostbyname", return_value="172.18.0.2"):
+            # Should not raise even though Node.js is not available
+            # because external node-proxy service is detected
+            validate_prereqs()
 
     def test_validate_prereqs_missing_litellm(self):
         """Test validate_prereqs when litellm is missing."""

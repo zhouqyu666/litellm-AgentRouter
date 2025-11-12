@@ -125,7 +125,19 @@ def validate_prereqs() -> None:
         )
         raise SystemExit(2) from exc
 
+    # Only check for Node.js if we need to start it as a subprocess
+    # Skip check if using external Node proxy service (docker-compose mode)
     if env_bool("NODE_UPSTREAM_PROXY_ENABLE", True):
+        # Check if we're in docker-compose mode with external node-proxy service
+        import socket
+        try:
+            socket.gethostbyname('node-proxy')
+            # External Node proxy service is available, skip Node.js runtime check
+            return
+        except socket.gaierror:
+            # No external service, we need Node.js runtime for subprocess
+            pass
+
         if shutil.which("node") is None:
             print(
                 "ERROR: Node.js runtime is required for the Node upstream proxy but not found.",
