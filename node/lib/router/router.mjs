@@ -86,11 +86,16 @@ export class NodeRequestRouter {
   _sendSuccess(res, data, response, forwardedHeaders, startTime) {
     const normalizedHeaders = headersToPlainObject(response.headers);
     const status = response.status ?? 200;
-    
+
     // Serialize the response body
     const body = JSON.stringify(data);
     const bodyBuffer = Buffer.from(body, 'utf-8');
-    
+
+    // Remove transfer-encoding header if present - it's incompatible with content-length
+    // HTTP spec: Transfer-Encoding and Content-Length are mutually exclusive
+    delete normalizedHeaders["transfer-encoding"];
+    delete normalizedHeaders["Transfer-Encoding"];
+
     const responseHeaders = {
       ...normalizedHeaders,
       "content-type": normalizedHeaders["content-type"] ?? "application/json",

@@ -224,3 +224,58 @@ test("NodeRequestRouter preserves request ID", async () => {
 
   assert.strictEqual(res.headers["x-request-id"], "req-456");
 });
+
+test("NodeRequestRouter removes Transfer-Encoding before setting Content-Length", async () => {
+  const mockClient = {
+    chat: {
+      completions: {
+        create: (body, options) => ({
+          withResponse: async () => ({
+            data: { id: "chat-789" },
+            response: {
+              status: 200,
+              // Simulate upstream sending both headers (incorrect but happens)
+              headers: new Headers({
+                "content-type": "application/json",
+                "transfer-encoding": "chunked",
+                "x-custom-header": "preserved",
+              }),
+            },
+          }),
+        }),
+      },
+    },
+    completions: { create: () => {} },
+  };
+
+  const router = new NodeRequestRouter({
+    client: mockClient,
+    logger: SILENT_LOGGER,
+  });
+
+  const req = createMockRequest({
+    path: "/v1/chat/completions",
+    body: { model: "gpt-4", messages: [] },
+  });
+  const res = new MockResponse();
+
+  await router.handle(req, res);
+
+  assert.strictEqual(res.statusCode, 200);
+  assert.ok(res.body.length > 0, "Response body should not be empty");
+
+  // Verify Transfer-Encoding is removed to comply with HTTP spec
+  // (Content-Length and Transfer-Encoding are mutually exclusive)
+  assert.ok(!res.headers["transfer-encoding"], "Transfer-Encoding header should be removed");
+  assert.ok(!res.headers["Transfer-Encoding"], "Transfer-Encoding header (caps) should be removed");
+
+  // Verify Content-Length is set (proves response was processed)
+  assert.ok(res.headers["content-length"], "Content-Length header should be present");
+
+  // Verify custom headers are preserved
+  assert.strictEqual(res.headers["x-custom-header"], "preserved", "Custom headers should be preserved");
+
+  // Verify response body is valid
+  const parsed = JSON.parse(res.body);
+  assert.deepStrictEqual(parsed, { id: "chat-789" });
+});

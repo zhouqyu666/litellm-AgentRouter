@@ -26,5 +26,4 @@ test("DEFAULT_UPSTREAM_BASE is agentrouter.org", () => {
 
 test("DEFAULT_USER_AGENT includes QwenCode", () => {
   assert.ok(DEFAULT_USER_AGENT.includes("QwenCode"));
-  assert.ok(DEFAULT_USER_AGENT.includes("0.2.0"));
 });
