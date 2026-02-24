@@ -616,6 +616,33 @@ agentrouter.org 首次请求可能有冷启动延迟（30 秒以上）。解决�
 
 ---
 
+## 技术交流群
+
+欢迎加入技术交流群，分享你的使用心得和建议：
+
+![微信群二维码](https://mypicture-1258720957.cos.ap-nanjing.myqcloud.com/Obsidian/%25E5%25BE%25AE%25E4%25BF%25A1%25E5%259B%25BE%25E7%2589%2587_20260223133201_158_292.jpg)
+
+---
+
+## 作者联系
+
+- **微信**: laohaibao2025
+- **邮箱**: 75271002@qq.com
+
+![微信二维码](https://mypicture-1258720957.cos.ap-nanjing.myqcloud.com/Screenshot_20260123_095617_com.tencent.mm.jpg)
+
+---
+
+## 打赏
+
+如果这个项目对你有帮助，欢迎请我喝杯咖啡 ☕
+
+**微信支付**
+
+![微信支付](https://mypicture-1258720957.cos.ap-nanjing.myqcloud.com/Obsidian/image-20250914152855543.png)
+
+---
+
 ## License
 
 SPDX-License-Identifier: MIT
