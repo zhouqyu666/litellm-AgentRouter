@@ -2,10 +2,31 @@ import { logEvent } from "../utils/logger.mjs";
 import { buildForwardHeaders, headersToPlainObject, readJsonBody } from "../utils/http-utils.mjs";
 import { createRouteHandlers } from "./routes.mjs";
 
+/**
+ * Extract a Bearer token from the Authorization header.
+ * Returns null when the header is missing or not in "Bearer <token>" form.
+ */
+function extractBearerToken(headers) {
+  const auth = headers["authorization"];
+  if (!auth) return null;
+  const parts = auth.split(/\s+/);
+  if (parts.length === 2 && parts[0].toLowerCase() === "bearer") {
+    return parts[1];
+  }
+  return null;
+}
+
 export class NodeRequestRouter {
-  constructor({ client, logger }) {
+  /**
+   * @param {object}   opts
+   * @param {function} opts.clientResolver  (apiKey) => OpenAI client
+   * @param {string|null} opts.fallbackApiKey  key used when request has no Authorization header
+   * @param {object}   opts.logger
+   */
+  constructor({ clientResolver, fallbackApiKey, logger }) {
     this.logger = logger;
-    this.handlers = createRouteHandlers(client);
+    this.fallbackApiKey = fallbackApiKey;
+    this.handlers = createRouteHandlers(clientResolver);
   }
 
   async handle(req, res) {
@@ -32,16 +53,22 @@ export class NodeRequestRouter {
       return this._sendError(res, 400, "Invalid JSON payload", requestId, error.message);
     }
 
+    // Resolve the API key: prefer the key from the incoming request, fall back to config
+    const apiKey = extractBearerToken(req.headers) ?? this.fallbackApiKey;
+    if (!apiKey) {
+      return this._sendError(res, 401, "No API key provided (Authorization header or OPENAI_API_KEY)", requestId);
+    }
+
     const forwardedHeaders = buildForwardHeaders(req.headers);
 
     try {
-      const result = await handler(payload, forwardedHeaders);
-      
+      const result = await handler(payload, forwardedHeaders, apiKey);
+
       // Check if this is a streaming response
       if (result.stream) {
         return this._sendStreamingResponse(res, result.stream, forwardedHeaders, startTime, requestId);
       }
-      
+
       // Non-streaming response
       const { data, response } = result;
       this._sendSuccess(res, data, response, forwardedHeaders, startTime);
@@ -136,7 +163,7 @@ export class NodeRequestRouter {
         const line = `data: ${JSON.stringify(chunk)}\n\n`;
         res.write(line);
       }
-      
+
       res.write("data: [DONE]\n\n");
       res.end();
 
@@ -158,7 +185,7 @@ export class NodeRequestRouter {
   }
 }
 
-export function createRequestHandler({ client, logger }) {
-  const router = new NodeRequestRouter({ client, logger });
+export function createRequestHandler({ clientResolver, fallbackApiKey, logger }) {
+  const router = new NodeRequestRouter({ clientResolver, fallbackApiKey, logger });
   return router.handle.bind(router);
 }

@@ -7,12 +7,12 @@ import {
 import { DEFAULT_USER_AGENT } from "../fetch/fetchVersion.mjs";
 
 export class NodeProxyConfig {
-  constructor({ port, host, timeoutMs, upstreamBase, apiKey, userAgent }) {
+  constructor({ port, host, timeoutMs, upstreamBase, fallbackApiKey, userAgent }) {
     this.port = port;
     this.host = host;
     this.timeoutMs = timeoutMs;
     this.upstreamBase = upstreamBase;
-    this.apiKey = apiKey;
+    this.fallbackApiKey = fallbackApiKey;
     this.userAgent = userAgent;
   }
 
@@ -21,19 +21,20 @@ export class NodeProxyConfig {
     const host = overrides.host ?? DEFAULT_HOST;
     const timeoutMs = overrides.timeoutMs ?? DEFAULT_TIMEOUT_SECONDS * 1000;
     const upstreamBase = overrides.upstreamBase ?? process.env.OPENAI_BASE_URL ?? DEFAULT_UPSTREAM_BASE;
-    const apiKey = overrides.apiKey ?? process.env.OPENAI_API_KEY;
     const userAgent = overrides.userAgent ?? process.env.NODE_USER_AGENT ?? DEFAULT_USER_AGENT;
 
-    if (!apiKey) {
-      throw new Error("OPENAI_API_KEY must be set for the Node upstream proxy");
-    }
+    // API key is optional at config level; it can come from each request's
+    // Authorization header (forwarded by LiteLLM with per-key entries).
+    const fallbackApiKey = overrides.apiKey
+      ?? process.env.OPENAI_API_KEY
+      ?? null;
 
     return new NodeProxyConfig({
       port,
       host,
       timeoutMs,
       upstreamBase,
-      apiKey,
+      fallbackApiKey,
       userAgent,
     });
   }

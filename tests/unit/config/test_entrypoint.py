@@ -194,6 +194,7 @@ class TestMain:
             drop_params=True,
             streaming=True,
             api_key="sk-test-api-key-1234567890",
+            api_keys=None,
         )
         mock_write.assert_called_once_with(
             "api_key: sk-1234567890abcdef\nmaster_key: master-key-secret",

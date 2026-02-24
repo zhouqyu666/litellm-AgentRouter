@@ -175,6 +175,21 @@ def prepare_config(args) -> tuple[str, bool]:
     drop_params = getattr(args, 'drop_params', True)
     streaming = getattr(args, 'streaming', True)
 
+    # Collect API keys: prefer OPENAI_API_KEYS (comma-separated) over single OPENAI_API_KEY
+    # Also detect comma-separated keys in OPENAI_API_KEY for convenience
+    from .rendering import parse_api_keys
+
+    api_keys_str = os.environ.get("OPENAI_API_KEYS")
+    api_keys = parse_api_keys(api_keys_str)
+
+    if not api_keys:
+        # Fallback: if OPENAI_API_KEY contains commas, treat it as multiple keys
+        single_str = os.environ.get("OPENAI_API_KEY", "")
+        if "," in single_str:
+            api_keys = parse_api_keys(single_str)
+
+    single_api_key = os.environ.get("OPENAI_API_KEY") if not api_keys else None
+
     # Generate configuration
     config_text = render_config(
         model_specs=model_specs,
@@ -182,6 +197,8 @@ def prepare_config(args) -> tuple[str, bool]:
         master_key=master_key,
         drop_params=drop_params,
         streaming=streaming,
+        api_key=single_api_key,
+        api_keys=api_keys if api_keys else None,
     )
 
     return config_text, True

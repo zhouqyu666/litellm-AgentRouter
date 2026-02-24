@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(node -c \"import\\(''./node/lib/config/config.mjs''\\)\")",
+      "Bash(node -c \"import\\(''./node/lib/client/client-pool.mjs''\\)\")",
+      "Bash(node --input-type=module -e \"import { NodeProxyConfig } from ''./node/lib/config/config.mjs''; console.log\\(''config OK''\\)\")",
+      "Bash(node --input-type=module -e:*)",
+      "Bash(npm install)",
+      "Bash(node --test:*)",
+      "Bash(git stash:*)",
+      "mcp__serena__check_onboarding_performed"
+    ]
+  }
+}

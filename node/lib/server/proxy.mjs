@@ -1,16 +1,13 @@
 import { NodeProxyConfig } from "../config/config.mjs";
 import { NodeProxyServer } from "./server.mjs";
-import { createDefaultClientFactory } from "../client/client.mjs";
 import { logEvent } from "../utils/logger.mjs";
 
 export function createNodeUpstreamProxy({
   logger = console,
-  openaiClientFactory,
   ...overrides
 } = {}) {
   const config = NodeProxyConfig.fromEnv(overrides);
-  const clientFactory = openaiClientFactory ?? createDefaultClientFactory();
-  const proxy = new NodeProxyServer({ config, logger, openaiClientFactory: clientFactory });
+  const proxy = new NodeProxyServer({ config, logger });
 
   return {
     start: async () => {

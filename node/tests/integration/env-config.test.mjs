@@ -12,20 +12,10 @@ test("reads OPENAI_BASE_URL from environment", () => {
   try {
     const proxy = createNodeUpstreamProxy({
       logger: SILENT_LOGGER,
-      openaiClientFactory: (options) => {
-        // Verify the environment variable was read
-        assert.strictEqual(options.baseURL, "https://custom.api.com/v1");
-        assert.strictEqual(options.apiKey, "sk-test-key");
-        
-        // Return a minimal fake client
-        return {
-          chat: { completions: { create: () => {} } },
-          completions: { create: () => {} },
-        };
-      },
     });
 
     assert.strictEqual(proxy.config.upstreamBase, "https://custom.api.com/v1");
+    assert.strictEqual(proxy.config.fallbackApiKey, "sk-test-key");
   } finally {
     if (originalEnv !== undefined) {
       process.env.OPENAI_BASE_URL = originalEnv;
@@ -44,15 +34,6 @@ test("reads NODE_USER_AGENT from environment", () => {
   try {
     const proxy = createNodeUpstreamProxy({
       logger: SILENT_LOGGER,
-      openaiClientFactory: (options) => {
-        // Verify the user agent was read from environment
-        assert.strictEqual(options.userAgent, "CustomAgent/1.0.0");
-        
-        return {
-          chat: { completions: { create: () => {} } },
-          completions: { create: () => {} },
-        };
-      },
     });
 
     assert.strictEqual(proxy.config.userAgent, "CustomAgent/1.0.0");
@@ -76,16 +57,6 @@ test("uses default values when environment variables are not set", () => {
   try {
     const proxy = createNodeUpstreamProxy({
       logger: SILENT_LOGGER,
-      openaiClientFactory: (options) => {
-        // Verify defaults are used
-        assert.ok(options.baseURL.includes("agentrouter.org"));
-        assert.ok(options.userAgent.includes("QwenCode"));
-        
-        return {
-          chat: { completions: { create: () => {} } },
-          completions: { create: () => {} },
-        };
-      },
     });
 
     assert.ok(proxy.config.upstreamBase.includes("agentrouter.org"));
@@ -108,10 +79,6 @@ test("always uses port 4000 regardless of environment", () => {
   try {
     const proxy = createNodeUpstreamProxy({
       logger: SILENT_LOGGER,
-      openaiClientFactory: () => ({
-        chat: { completions: { create: () => {} } },
-        completions: { create: () => {} },
-      }),
     });
 
     // Port should always be 4000, not affected by PORT env var
@@ -122,25 +89,16 @@ test("always uses port 4000 regardless of environment", () => {
   }
 });
 
-test("throws error when OPENAI_API_KEY is missing", () => {
+test("allows missing OPENAI_API_KEY (key comes from request)", () => {
   const originalKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
 
   try {
-    assert.throws(
-      () => {
-        createNodeUpstreamProxy({
-          logger: SILENT_LOGGER,
-          openaiClientFactory: () => ({
-            chat: { completions: { create: () => {} } },
-            completions: { create: () => {} },
-          }),
-        });
-      },
-      {
-        message: /OPENAI_API_KEY must be set/,
-      }
-    );
+    const proxy = createNodeUpstreamProxy({
+      logger: SILENT_LOGGER,
+    });
+
+    assert.strictEqual(proxy.config.fallbackApiKey, null);
   } finally {
     if (originalKey !== undefined) {
       process.env.OPENAI_API_KEY = originalKey;
@@ -159,21 +117,10 @@ test("overrides take precedence over environment variables", () => {
       upstreamBase: "https://override.api.com/v1",
       apiKey: "sk-override-key",
       userAgent: "OverrideAgent/2.0",
-      openaiClientFactory: (options) => {
-        // Verify overrides take precedence
-        assert.strictEqual(options.baseURL, "https://override.api.com/v1");
-        assert.strictEqual(options.apiKey, "sk-override-key");
-        assert.strictEqual(options.userAgent, "OverrideAgent/2.0");
-        
-        return {
-          chat: { completions: { create: () => {} } },
-          completions: { create: () => {} },
-        };
-      },
     });
 
     assert.strictEqual(proxy.config.upstreamBase, "https://override.api.com/v1");
-    assert.strictEqual(proxy.config.apiKey, "sk-override-key");
+    assert.strictEqual(proxy.config.fallbackApiKey, "sk-override-key");
     assert.strictEqual(proxy.config.userAgent, "OverrideAgent/2.0");
   } finally {
     delete process.env.OPENAI_BASE_URL;

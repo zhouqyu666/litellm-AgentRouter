@@ -1,22 +1,24 @@
 import http from "node:http";
 import { logEvent } from "../utils/logger.mjs";
 import { createRequestHandler } from "../router/router.mjs";
+import { ClientPool } from "../client/client-pool.mjs";
 
 export class NodeProxyServer {
-  constructor({ config, logger, openaiClientFactory }) {
+  constructor({ config, logger }) {
     this.config = config;
     this.logger = logger;
-    this.client = this._createClient(openaiClientFactory);
-    this.server = http.createServer(createRequestHandler({ client: this.client, logger }));
-  }
-
-  _createClient(factory) {
-    return factory({
-      apiKey: this.config.apiKey,
-      baseURL: this.config.upstreamBase,
-      timeoutMs: this.config.timeoutMs,
-      userAgent: this.config.userAgent,
+    this.clientPool = new ClientPool({
+      baseURL: config.upstreamBase,
+      timeoutMs: config.timeoutMs,
+      userAgent: config.userAgent,
     });
+    this.server = http.createServer(
+      createRequestHandler({
+        clientResolver: (apiKey) => this.clientPool.get(apiKey),
+        fallbackApiKey: config.fallbackApiKey,
+        logger,
+      })
+    );
   }
 
   start() {

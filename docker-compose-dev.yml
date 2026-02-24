@@ -1,7 +1,10 @@
 services:
   node-proxy:
-    image: wwwzhouhui569/litellm-agentrouter:latest
+    build: .
     container_name: litellm-node-proxy
+    volumes:
+      - ./node:/app/node
+      - ./.env:/app/.env
     env_file:
       - .env
     restart: unless-stopped
@@ -18,17 +21,18 @@ services:
     command: ["node", "/app/node/main.mjs"]
 
   litellm-proxy:
-    image: wwwzhouhui569/litellm-agentrouter:latest
+    build: .
     container_name: litellm-python-proxy
     ports:
       - "${PORT:-4000}:4000"
     entrypoint: ["/bin/bash", "/app/entrypoint.sh"]
+    volumes:
+      - ./src:/app/src
+      - ./.env:/app/.env
+      - ./entrypoint.sh:/app/entrypoint.sh
     env_file:
       - .env
     restart: unless-stopped
-    depends_on:
-      node-proxy:
-        condition: service_healthy
     networks:
       default:
         aliases:

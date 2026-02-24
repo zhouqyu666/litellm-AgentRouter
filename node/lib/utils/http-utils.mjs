@@ -1,14 +1,14 @@
 export function buildForwardHeaders(originalHeaders) {
   const forwarded = {};
-  
+
   if (originalHeaders["x-request-id"]) {
     forwarded["X-Request-ID"] = originalHeaders["x-request-id"];
   }
-  
-  if (originalHeaders["user-agent"]) {
-    forwarded["User-Agent"] = originalHeaders["user-agent"];
-  }
-  
+
+  // Do NOT forward User-Agent from the incoming request.
+  // The Node proxy must use the OpenAI SDK's own User-Agent when calling
+  // upstream (agentrouter.org rejects non-SDK User-Agent strings).
+
   return forwarded;
 }
 

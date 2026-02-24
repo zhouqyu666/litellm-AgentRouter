@@ -13,7 +13,7 @@ test("NodeProxyConfig.fromEnv uses defaults when no overrides", () => {
     assert.strictEqual(config.host, "0.0.0.0");
     assert.strictEqual(config.timeoutMs, 300_000);
     assert.strictEqual(config.upstreamBase, "https://agentrouter.org/v1");
-    assert.strictEqual(config.apiKey, "sk-test-key");
+    assert.strictEqual(config.fallbackApiKey, "sk-test-key");
     assert.ok(config.userAgent.includes("QwenCode"));
   } finally {
     if (originalApiKey) {
@@ -42,7 +42,7 @@ test("NodeProxyConfig.fromEnv applies overrides", () => {
     assert.strictEqual(config.host, "127.0.0.1");
     assert.strictEqual(config.timeoutMs, 30_000);
     assert.strictEqual(config.upstreamBase, "https://custom.api/v1");
-    assert.strictEqual(config.apiKey, "sk-override-key");
+    assert.strictEqual(config.fallbackApiKey, "sk-override-key");
     assert.strictEqual(config.userAgent, "CustomAgent/1.0");
   } finally {
     if (originalApiKey) {
@@ -65,7 +65,7 @@ test("NodeProxyConfig.fromEnv reads from environment variables", () => {
   try {
     const config = NodeProxyConfig.fromEnv();
 
-    assert.strictEqual(config.apiKey, "sk-from-env");
+    assert.strictEqual(config.fallbackApiKey, "sk-from-env");
     assert.strictEqual(config.upstreamBase, "https://env.api/v1");
     assert.strictEqual(config.userAgent, "EnvAgent/2.0");
   } finally {
@@ -87,15 +87,13 @@ test("NodeProxyConfig.fromEnv reads from environment variables", () => {
   }
 });
 
-test("NodeProxyConfig.fromEnv throws when API key is missing", () => {
+test("NodeProxyConfig.fromEnv allows missing API key", () => {
   const originalApiKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
 
   try {
-    assert.throws(
-      () => NodeProxyConfig.fromEnv(),
-      /OPENAI_API_KEY must be set/
-    );
+    const config = NodeProxyConfig.fromEnv();
+    assert.strictEqual(config.fallbackApiKey, null);
   } finally {
     if (originalApiKey) {
       process.env.OPENAI_API_KEY = originalApiKey;

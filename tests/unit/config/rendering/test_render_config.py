@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from src.config.models import ModelSpec
-from src.config.rendering import render_config
+from src.config.rendering import parse_api_keys, render_config
 
 
 def make_spec(
@@ -28,6 +28,31 @@ def make_spec(
         upstream_base=upstream_base,
         reasoning_effort=reasoning_effort,
     )
+
+
+class TestParseApiKeys:
+    """Tests for parse_api_keys helper."""
+
+    def test_parse_single_key(self):
+        assert parse_api_keys("sk-abc") == ["sk-abc"]
+
+    def test_parse_multiple_keys(self):
+        result = parse_api_keys("sk-a,sk-b,sk-c")
+        assert result == ["sk-a", "sk-b", "sk-c"]
+
+    def test_parse_strips_whitespace(self):
+        result = parse_api_keys(" sk-a , sk-b , sk-c ")
+        assert result == ["sk-a", "sk-b", "sk-c"]
+
+    def test_parse_empty_string(self):
+        assert parse_api_keys("") == []
+
+    def test_parse_none(self):
+        assert parse_api_keys(None) == []
+
+    def test_parse_ignores_empty_segments(self):
+        result = parse_api_keys("sk-a,,sk-b,")
+        assert result == ["sk-a", "sk-b"]
 
 
 class TestRenderConfig:
@@ -139,3 +164,62 @@ class TestRenderConfig:
                 drop_params=False,
                 streaming=True
             )
+
+    def test_render_config_multiple_api_keys_duplicates_entries(self):
+        """Each model should produce N entries when N API keys are provided."""
+        spec = make_spec(key="glm", alias="glm-4.6", upstream_model="glm-4.6")
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="http://127.0.0.1:4000/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+            api_keys=["sk-a", "sk-b", "sk-c"],
+        )
+
+        parsed = yaml.safe_load(config_text)
+        entries = parsed["model_list"]
+        assert len(entries) == 3
+        # All entries share the same model_name
+        assert all(e["model_name"] == "glm-4.6" for e in entries)
+        # Each entry has a distinct api_key
+        keys = [e["litellm_params"]["api_key"] for e in entries]
+        assert keys == ["sk-a", "sk-b", "sk-c"]
+        # router_settings should enable simple-shuffle
+        assert parsed["router_settings"]["routing_strategy"] == "simple-shuffle"
+
+    def test_render_config_multiple_keys_multiple_models(self):
+        """Multiple models × multiple keys should produce M×N entries."""
+        specs = [
+            make_spec(key="glm", alias="glm-4.6", upstream_model="glm-4.6"),
+            make_spec(key="gpt5", alias="gpt-5", upstream_model="gpt-5"),
+        ]
+        config_text = render_config(
+            model_specs=specs,
+            global_upstream_base="http://127.0.0.1:4000/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+            api_keys=["sk-1", "sk-2"],
+        )
+
+        parsed = yaml.safe_load(config_text)
+        entries = parsed["model_list"]
+        assert len(entries) == 4  # 2 models × 2 keys
+
+    def test_render_config_single_api_key_backward_compat(self):
+        """A single api_key should produce one entry per model (old behaviour)."""
+        spec = make_spec(key="glm", alias="glm-4.6", upstream_model="glm-4.6")
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="http://127.0.0.1:4000/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+            api_key="sk-single",
+        )
+
+        parsed = yaml.safe_load(config_text)
+        assert len(parsed["model_list"]) == 1
+        assert parsed["model_list"][0]["litellm_params"]["api_key"] == "sk-single"
+        assert "router_settings" not in parsed

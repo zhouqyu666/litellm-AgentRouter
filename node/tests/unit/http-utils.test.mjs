@@ -14,15 +14,15 @@ test("buildForwardHeaders extracts x-request-id", () => {
   assert.strictEqual(forwarded["content-type"], undefined);
 });
 
-test("buildForwardHeaders extracts user-agent", () => {
+test("buildForwardHeaders does NOT forward user-agent (Node proxy uses its own)", () => {
   const headers = {
     "user-agent": "TestAgent/1.0",
     "accept": "application/json",
   };
 
   const forwarded = buildForwardHeaders(headers);
-  
-  assert.strictEqual(forwarded["User-Agent"], "TestAgent/1.0");
+
+  assert.strictEqual(forwarded["User-Agent"], undefined);
   assert.strictEqual(forwarded["accept"], undefined);
 });
 

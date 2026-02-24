@@ -1,5 +1,13 @@
-export function createRouteHandlers(client) {
-  const wrapHandler = (handler) => async (body, forwardedHeaders) => {
+/**
+ * Build route handlers that resolve the OpenAI client dynamically per-request.
+ *
+ * @param {function} clientResolver  (apiKey) => OpenAI client instance
+ */
+export function createRouteHandlers(clientResolver) {
+  const wrapHandler = (handlerFn) => async (body, forwardedHeaders, apiKey) => {
+    const client = clientResolver(apiKey);
+    const handler = handlerFn(client);
+
     if (!handler) {
       throw new Error("Handler not available");
     }
@@ -8,7 +16,7 @@ export function createRouteHandlers(client) {
     const isStreaming = body.stream === true;
 
     const upstreamPromise = handler(body, { headers: forwardedHeaders });
-    
+
     // For streaming requests, return the stream directly
     if (isStreaming) {
       const stream = await upstreamPromise;
@@ -33,7 +41,11 @@ export function createRouteHandlers(client) {
   };
 
   return {
-    "/v1/chat/completions": wrapHandler(client.chat?.completions?.create?.bind(client.chat.completions)),
-    "/v1/completions": wrapHandler(client.completions?.create?.bind(client.completions)),
+    "/v1/chat/completions": wrapHandler(
+      (client) => client.chat?.completions?.create?.bind(client.chat.completions)
+    ),
+    "/v1/completions": wrapHandler(
+      (client) => client.completions?.create?.bind(client.completions)
+    ),
   };
 }

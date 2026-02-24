@@ -41,8 +41,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--upstream-base",
         dest="upstream_base",
-        default=os.getenv("OPENAI_BASE_URL", "https://agentrouter.org/v1"),
-        help="Base URL for the upstream OpenAI-compatible endpoint.",
+        default=None,
+        help="Base URL for the upstream OpenAI-compatible endpoint. "
+             "When set, bypasses the Node upstream proxy.",
     )
     node_proxy_default = env_bool("NODE_UPSTREAM_PROXY_ENABLE", True)
     parser.add_argument(

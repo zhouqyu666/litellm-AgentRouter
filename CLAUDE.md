@@ -11,23 +11,41 @@
 - Prefer using centralized config src\config\config.py instead of os.getenv
 - Source code should follow SOLID principles
 
-## Codebase Familiarity
+## 代码库概览
 
-- This is a Python 3.8+ project using LiteLLM as the core dependency for multi-model proxy functionality.
-- The codebase has been refactored from monolithic modules into focused subsystems (`config/`, `telemetry/`).
-- Test coverage is comprehensive (95%+) and must be maintained with any changes.
-- The project uses PowerShell scripts for common tasks on Windows (`_flake8.ps1`, `_autopep8.ps1`, `_restart.ps1`).
+- Python 3.8+ 项目，使用 LiteLLM 作为核心依赖实现多模型代理功能。
+- 代码已从单体模块重构为聚焦子系统（`config/`、`telemetry/`）。
+- 测试覆盖率需保持 95% 以上。
+- 项目在 Windows 上使用 PowerShell 脚本执行常见任务（`_flake8.ps1`、`_autopep8.ps1`、`_restart.ps1`）。
 
-## Key Concepts
+## 核心概念
 
-- **Model Specs**: Defined in `src/config/models.py`, these describe model capabilities (reasoning support, parameter filtering).
-- **Reasoning Effort**: Some models (DeepSeek, GPT-5) support reasoning effort controls via custom parameters.
-- **Alias Lookup**: The telemetry system resolves model aliases to canonical names for consistent logging.
-- **Multi-Model Config**: Declare each model with `MODEL_<KEY>_*` env vars; keys are autodiscovered (alphabetical order) without needing `PROXY_MODEL_KEYS` (which is now ignored).
+- **Model Specs**: 定义在 `src/config/models.py`，描述模型能力（推理支持、参数过滤）。
+- **Reasoning Effort**: 部分模型（DeepSeek、GPT-5）支持通过自定义参数控制推理强度。
+- **Alias Lookup**: 遥测系统将模型别名解析为规范名称，确保日志一致性。
+- **多模型配置**: 通过 `MODEL_<KEY>_*` 环境变量声明模型，自动发现（字母序排列），无需 `PROXY_MODEL_KEYS`（已忽略）。
+- **多 Key 负载均衡**: 通过 `OPENAI_API_KEYS`（逗号分隔）或 `OPENAI_API_KEY`（含逗号时自动拆分）配置多个 API Key，LiteLLM 使用 `simple-shuffle` 策略在 Key 间轮询分发请求。
+- **Node 上游代理**: agentrouter.org 拒绝非 Node.js SDK 客户端，所有上游请求必须通过 Node 代理转发。Node 代理通过 `ClientPool` 为每个 API Key 缓存独立的 OpenAI SDK 客户端实例。
+- **动态 API Key 路由**: Node 代理从请求的 `Authorization` 头提取 Bearer Token 作为 API Key，不再使用固定配置的 Key。`buildForwardHeaders` 不转发来源请求的 `User-Agent`，确保上游始终看到 OpenAI SDK 的 User-Agent。
 
-## When Making Changes
+## 关键文件
 
-- Always check if changes affect the configuration pipeline (env → CLI → YAML → proxy).
-- Consider backward compatibility with existing `.env` files and CLI usage patterns.
-- Update both unit and integration tests when adding new model support or features.
-- Verify that generated YAML configs use `os.environ/VAR_NAME` references for secrets (not hardcoded values).
+- `src/config/rendering.py` — `render_config()` 生成 YAML 配置，`parse_api_keys()` 解析逗号分隔的 Key 列表
+- `src/config/parsing.py` — `prepare_config()` 组装配置参数，处理多 Key 优先级逻辑
+- `src/config/entrypoint.py` — Docker 容器入口，包含相同的多 Key 处理逻辑
+- `src/cli.py` — CLI 参数解析，`--upstream-base` 默认为 `None`（不设置时走 Node 代理）
+- `node/lib/client/client-pool.mjs` — `ClientPool` 按 API Key 缓存 OpenAI SDK 客户端
+- `node/lib/router/router.mjs` — 提取 Bearer Token，动态解析 API Key
+- `node/lib/router/routes.mjs` — 接受 `clientResolver` 函数动态创建客户端
+- `node/lib/utils/http-utils.mjs` — `buildForwardHeaders` 仅转发 `X-Request-ID`，不转发 `User-Agent`
+- `test_keys_and_loadbalance.py` — Key 验证和负载均衡测试脚本
+
+## 修改注意事项
+
+- 始终检查修改是否影响配置管线（env → CLI → YAML → proxy）。
+- 考虑与现有 `.env` 文件和 CLI 使用模式的向后兼容性。
+- 添加新模型或功能时，同时更新单元测试和集成测试。
+- 确认生成的 YAML 配置中密钥使用 `os.environ/VAR_NAME` 引用（不硬编码）。
+- 修改 Node 代理时，确保 `buildForwardHeaders` 不转发 `User-Agent`（agentrouter.org 会拒绝非 SDK 的 User-Agent）。
+- 修改多 Key 逻辑时，注意优先级：`OPENAI_API_KEYS` > `OPENAI_API_KEY`（含逗号）> `OPENAI_API_KEY`（单 Key）。
+- `--upstream-base` CLI 参数默认为 `None`，设置后会绕过 Node 代理直连上游（仅用于自定义端点）。
