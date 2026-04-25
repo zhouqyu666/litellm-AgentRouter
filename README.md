@@ -390,7 +390,7 @@ litellm-AgentRouter/
 预构建镜像已发布到 Docker Hub：
 
 ```
-wwwzhouhui569/litellm-agentrouter:latest
+hailaobao2026/litellm-agentrouter:latest
 ```
 
 该镜像同时包含 Python 和 Node.js 运行时，`docker-compose.yml` 通过不同的启动命令区分两个服务：
@@ -423,10 +423,10 @@ docker-compose pull && docker-compose up -d
 
 ```bash
 # 构建镜像
-docker build -t wwwzhouhui569/litellm-agentrouter .
+docker build -t hailaobao2026/litellm-agentrouter .
 
 # 推送到 Docker Hub（需先 docker login）
-docker push wwwzhouhui569/litellm-agentrouter
+docker push hailaobao2026/litellm-agentrouter
 ```
 
 镜像基于 `python:3.12-slim`，额外安装了 Node.js 运行时，同时包含 Python 和 Node.js 两套代码。两个服务共用同一个镜像，通过 `docker-compose.yml` 中不同的 `command` / `entrypoint` 启动不同的服务进程。
@@ -445,7 +445,7 @@ docker run -d \
   --network litellm-network \
   --env-file .env \
   --restart unless-stopped \
-  wwwzhouhui569/litellm-agentrouter:latest \
+  hailaobao2026/litellm-agentrouter:latest \
   node /app/node/main.mjs
 
 # 启动 LiteLLM Python 代理
@@ -456,7 +456,7 @@ docker run -d \
   -p 4000:4000 \
   --entrypoint /bin/bash \
   --restart unless-stopped \
-  wwwzhouhui569/litellm-agentrouter:latest \
+  hailaobao2026/litellm-agentrouter:latest \
   /app/entrypoint.sh
 ```
 

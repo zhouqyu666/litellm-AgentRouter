@@ -1,6 +1,6 @@
 services:
   node-proxy:
-    image: wwwzhouhui569/litellm-agentrouter:latest
+    image: hailaobao2026/litellm-agentrouter:latest
     container_name: litellm-node-proxy
     env_file:
       - .env
@@ -18,7 +18,7 @@ services:
     command: ["node", "/app/node/main.mjs"]
 
   litellm-proxy:
-    image: wwwzhouhui569/litellm-agentrouter:latest
+    image: hailaobao2026/litellm-agentrouter:latest
     container_name: litellm-python-proxy
     ports:
       - "${PORT:-4000}:4000"
