@@ -11,7 +11,9 @@ def create_alias_lookup(model_specs: List[ModelSpec]) -> Dict[str, str]:
     for spec in model_specs:
         if getattr(spec, "alias", None):
             upstream = spec.upstream_model
-            if not upstream.startswith("openai/"):
-                upstream = f"openai/{upstream}"
+            provider = getattr(spec, "provider", "openai")
+            prefix = f"{provider}/"
+            if not upstream.startswith(prefix):
+                upstream = f"{prefix}{upstream}"
             lookup[spec.alias] = upstream
     return lookup

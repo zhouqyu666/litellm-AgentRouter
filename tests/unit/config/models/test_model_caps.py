@@ -128,3 +128,64 @@ class TestGLM46Integration:
 
         parsed = yaml.safe_load(config_text)
         assert "reasoning_effort" not in parsed["model_list"][0]["litellm_params"]
+
+
+class TestAnthropicModels:
+    """Tests for Anthropic model capabilities."""
+
+    def test_claude_sonnet_in_model_caps(self):
+        assert "claude-sonnet-4-20250514" in MODEL_CAPS
+
+    def test_claude_opus_in_model_caps(self):
+        assert "claude-opus-4-20250514" in MODEL_CAPS
+
+    def test_claude_haiku_in_model_caps(self):
+        assert "claude-haiku-4-20250514" in MODEL_CAPS
+
+    def test_claude_does_not_support_reasoning(self):
+        """Anthropic extended thinking is not controlled via reasoning_effort."""
+        for model in ("claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-haiku-4-20250514"):
+            caps = get_model_capabilities(model)
+            assert caps["supports_reasoning"] is False, f"{model} should not support reasoning"
+
+    def test_render_config_with_claude_sonnet(self):
+        """Anthropic model should use anthropic/ prefix, no custom_llm_provider."""
+        spec = make_spec(
+            key="claude",
+            alias="claude-sonnet",
+            upstream_model="claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key="sk-test",
+            drop_params=True,
+            streaming=True,
+        )
+
+        parsed = yaml.safe_load(config_text)
+        params = parsed["model_list"][0]["litellm_params"]
+        assert params["model"] == "anthropic/claude-sonnet-4-20250514"
+        assert "custom_llm_provider" not in params
+        assert "headers" not in params
+        # Anthropic should NOT use the global upstream_base
+        assert "api_base" not in params
+
+    def test_claude_reasoning_effort_filtered(self):
+        """reasoning_effort should be ignored for Claude models."""
+        spec = make_spec(
+            key="claude",
+            alias="claude-sonnet",
+            upstream_model="claude-sonnet-4-20250514",
+            reasoning_effort="high",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key="sk-test",
+            drop_params=True,
+            streaming=True,
+        )
+
+        parsed = yaml.safe_load(config_text)
+        assert "reasoning_effort" not in parsed["model_list"][0]["litellm_params"]

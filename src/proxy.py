@@ -26,6 +26,9 @@ def start_proxy(args: argparse.Namespace, config_path: Path) -> None:
 
     from litellm.proxy.proxy_cli import run_server
 
+    import logging
+    logger = logging.getLogger(__name__)
+
     # Initialize telemetry logging regardless of model spec source
     try:
         from .middleware.registry import install_middlewares
@@ -34,9 +37,13 @@ def start_proxy(args: argparse.Namespace, config_path: Path) -> None:
         from litellm.proxy import proxy_server
         if hasattr(proxy_server, 'app'):
             install_middlewares(proxy_server.app, model_specs)
+            # Install admin management panel
+            try:
+                from .admin.install import install_admin
+                install_admin(proxy_server.app)
+            except Exception as admin_err:
+                logger.warning(f"Failed to install admin routes: {admin_err}")
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
         logger.warning(f"Failed to initialize middlewares: {e}")
 
     cli_args = [

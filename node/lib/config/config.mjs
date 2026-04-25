@@ -3,17 +3,20 @@ import {
   DEFAULT_HOST,
   DEFAULT_TIMEOUT_SECONDS,
   DEFAULT_UPSTREAM_BASE,
+  DEFAULT_ANTHROPIC_UPSTREAM_BASE,
 } from "./constants.mjs";
 import { DEFAULT_USER_AGENT } from "../fetch/fetchVersion.mjs";
 
 export class NodeProxyConfig {
-  constructor({ port, host, timeoutMs, upstreamBase, fallbackApiKey, userAgent }) {
+  constructor({ port, host, timeoutMs, upstreamBase, fallbackApiKey, userAgent, anthropicUpstreamBase, anthropicFallbackApiKey }) {
     this.port = port;
     this.host = host;
     this.timeoutMs = timeoutMs;
     this.upstreamBase = upstreamBase;
     this.fallbackApiKey = fallbackApiKey;
     this.userAgent = userAgent;
+    this.anthropicUpstreamBase = anthropicUpstreamBase;
+    this.anthropicFallbackApiKey = anthropicFallbackApiKey;
   }
 
   static fromEnv(overrides = {}) {
@@ -29,6 +32,16 @@ export class NodeProxyConfig {
       ?? process.env.OPENAI_API_KEY
       ?? null;
 
+    // Anthropic upstream configuration
+    const anthropicUpstreamBase = overrides.anthropicUpstreamBase
+      ?? process.env.ANTHROPIC_BASE_URL
+      ?? DEFAULT_ANTHROPIC_UPSTREAM_BASE;
+
+    // Fallback: ANTHROPIC_API_KEY → OPENAI_API_KEY (unified proxies use one key)
+    const anthropicFallbackApiKey = overrides.anthropicApiKey
+      ?? process.env.ANTHROPIC_API_KEY
+      ?? fallbackApiKey;
+
     return new NodeProxyConfig({
       port,
       host,
@@ -36,6 +49,8 @@ export class NodeProxyConfig {
       upstreamBase,
       fallbackApiKey,
       userAgent,
+      anthropicUpstreamBase,
+      anthropicFallbackApiKey,
     });
   }
 }

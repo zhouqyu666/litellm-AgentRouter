@@ -15,8 +15,8 @@ from typing import NoReturn
 
 from .config import runtime_config
 from ..node.process import NodeProxyProcess
-from .parsing import discover_model_keys, load_model_specs_from_env
-from .rendering import render_config, parse_api_keys
+from .parsing import discover_model_keys, load_model_specs_from_env, _collect_provider_api_keys
+from .rendering import render_config
 
 
 def validate_environment() -> None:
@@ -146,16 +146,15 @@ def main() -> NoReturn:
     global_upstream_base = node_base_url or runtime_config.get_str("OPENAI_BASE_URL", "https://agentrouter.org/v1")
     master_key = runtime_config.get_str("LITELLM_MASTER_KEY", "sk-local-master")
 
-    # Collect API keys: prefer OPENAI_API_KEYS (comma-separated) over single OPENAI_API_KEY
-    api_keys_str = runtime_config.get_str("OPENAI_API_KEYS")
-    api_keys = parse_api_keys(api_keys_str)
+    # Derive node_proxy_base for Anthropic routing (strip /v1 suffix)
+    node_proxy_base = None
+    if node_base_url:
+        node_proxy_base = node_base_url.rstrip("/")
+        if node_proxy_base.endswith("/v1"):
+            node_proxy_base = node_proxy_base[:-3]
 
-    if not api_keys:
-        single_str = runtime_config.get_str("OPENAI_API_KEY", "")
-        if "," in single_str:
-            api_keys = parse_api_keys(single_str)
-
-    single_api_key = runtime_config.get_str("OPENAI_API_KEY") if not api_keys else None
+    # Collect API keys for all providers
+    provider_api_keys = _collect_provider_api_keys()
 
     try:
         config_text = render_config(
@@ -164,8 +163,8 @@ def main() -> NoReturn:
             master_key=master_key,
             drop_params=True,
             streaming=True,
-            api_key=single_api_key,
-            api_keys=api_keys if api_keys else None,
+            provider_api_keys=provider_api_keys if provider_api_keys else None,
+            node_proxy_base=node_proxy_base,
         )
     except Exception as e:
         if node_process:

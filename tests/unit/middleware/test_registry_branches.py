@@ -71,6 +71,30 @@ class TestRegistryBranches:
         # Alias lookup uses the alias (public name), not the key
         assert "gpt-4" in alias_lookup
         assert "claude-3" in alias_lookup
+        # Verify provider-aware prefixes
+        assert alias_lookup["gpt-4"] == "openai/gpt-4"
+        assert alias_lookup["claude-3"] == "anthropic/claude-3"
+
+    def test_alias_resolver_fallback_no_hardcoded_prefix(self):
+        """Alias resolver fallback should NOT hardcode openai/ prefix."""
+        app = SimpleNamespace()
+        config_captured = None
+
+        def capture_middleware(middleware_class, **kwargs):
+            nonlocal config_captured
+            if "config" in kwargs:
+                config_captured = kwargs["config"]
+
+        app.add_middleware = capture_middleware
+        app.state = SimpleNamespace()
+
+        install_middlewares(app, [])
+
+        if config_captured:
+            # Unknown alias should be returned as-is, not prefixed with openai/
+            result = config_captured.alias_resolver("unknown-model")
+            assert result == "unknown-model"
+            assert not result.startswith("openai/")
 
     def test_always_on_toggle_enabled(self):
         """AlwaysOnToggle should always return True."""

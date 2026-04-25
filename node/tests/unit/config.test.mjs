@@ -4,7 +4,11 @@ import { NodeProxyConfig } from "../../lib/config/config.mjs";
 
 test("NodeProxyConfig.fromEnv uses defaults when no overrides", () => {
   const originalApiKey = process.env.OPENAI_API_KEY;
+  const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
+  const originalAnthropicBase = process.env.ANTHROPIC_BASE_URL;
   process.env.OPENAI_API_KEY = "sk-test-key";
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.ANTHROPIC_BASE_URL;
 
   try {
     const config = NodeProxyConfig.fromEnv();
@@ -15,11 +19,24 @@ test("NodeProxyConfig.fromEnv uses defaults when no overrides", () => {
     assert.strictEqual(config.upstreamBase, "https://agentrouter.org/v1");
     assert.strictEqual(config.fallbackApiKey, "sk-test-key");
     assert.ok(config.userAgent.includes("QwenCode"));
+    assert.strictEqual(config.anthropicUpstreamBase, "https://agentrouter.org");
+    // Anthropic fallback inherits from OpenAI key when ANTHROPIC_API_KEY is unset
+    assert.strictEqual(config.anthropicFallbackApiKey, "sk-test-key");
   } finally {
     if (originalApiKey) {
       process.env.OPENAI_API_KEY = originalApiKey;
     } else {
       delete process.env.OPENAI_API_KEY;
+    }
+    if (originalAnthropicKey) {
+      process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
+    } else {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+    if (originalAnthropicBase) {
+      process.env.ANTHROPIC_BASE_URL = originalAnthropicBase;
+    } else {
+      delete process.env.ANTHROPIC_BASE_URL;
     }
   }
 });
@@ -36,6 +53,8 @@ test("NodeProxyConfig.fromEnv applies overrides", () => {
       upstreamBase: "https://custom.api/v1",
       apiKey: "sk-override-key",
       userAgent: "CustomAgent/1.0",
+      anthropicUpstreamBase: "https://custom-anthropic.api",
+      anthropicApiKey: "sk-ant-override",
     });
 
     assert.strictEqual(config.port, 8080);
@@ -44,6 +63,8 @@ test("NodeProxyConfig.fromEnv applies overrides", () => {
     assert.strictEqual(config.upstreamBase, "https://custom.api/v1");
     assert.strictEqual(config.fallbackApiKey, "sk-override-key");
     assert.strictEqual(config.userAgent, "CustomAgent/1.0");
+    assert.strictEqual(config.anthropicUpstreamBase, "https://custom-anthropic.api");
+    assert.strictEqual(config.anthropicFallbackApiKey, "sk-ant-override");
   } finally {
     if (originalApiKey) {
       process.env.OPENAI_API_KEY = originalApiKey;
@@ -57,10 +78,14 @@ test("NodeProxyConfig.fromEnv reads from environment variables", () => {
   const originalApiKey = process.env.OPENAI_API_KEY;
   const originalBaseUrl = process.env.OPENAI_BASE_URL;
   const originalUserAgent = process.env.NODE_USER_AGENT;
+  const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
+  const originalAnthropicBase = process.env.ANTHROPIC_BASE_URL;
 
   process.env.OPENAI_API_KEY = "sk-from-env";
   process.env.OPENAI_BASE_URL = "https://env.api/v1";
   process.env.NODE_USER_AGENT = "EnvAgent/2.0";
+  process.env.ANTHROPIC_API_KEY = "sk-ant-from-env";
+  process.env.ANTHROPIC_BASE_URL = "https://ant-env.api";
 
   try {
     const config = NodeProxyConfig.fromEnv();
@@ -68,6 +93,8 @@ test("NodeProxyConfig.fromEnv reads from environment variables", () => {
     assert.strictEqual(config.fallbackApiKey, "sk-from-env");
     assert.strictEqual(config.upstreamBase, "https://env.api/v1");
     assert.strictEqual(config.userAgent, "EnvAgent/2.0");
+    assert.strictEqual(config.anthropicFallbackApiKey, "sk-ant-from-env");
+    assert.strictEqual(config.anthropicUpstreamBase, "https://ant-env.api");
   } finally {
     if (originalApiKey) {
       process.env.OPENAI_API_KEY = originalApiKey;
@@ -84,19 +111,35 @@ test("NodeProxyConfig.fromEnv reads from environment variables", () => {
     } else {
       delete process.env.NODE_USER_AGENT;
     }
+    if (originalAnthropicKey) {
+      process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
+    } else {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+    if (originalAnthropicBase) {
+      process.env.ANTHROPIC_BASE_URL = originalAnthropicBase;
+    } else {
+      delete process.env.ANTHROPIC_BASE_URL;
+    }
   }
 });
 
 test("NodeProxyConfig.fromEnv allows missing API key", () => {
   const originalApiKey = process.env.OPENAI_API_KEY;
+  const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
 
   try {
     const config = NodeProxyConfig.fromEnv();
     assert.strictEqual(config.fallbackApiKey, null);
+    assert.strictEqual(config.anthropicFallbackApiKey, null);
   } finally {
     if (originalApiKey) {
       process.env.OPENAI_API_KEY = originalApiKey;
+    }
+    if (originalAnthropicKey) {
+      process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
     }
   }
 });

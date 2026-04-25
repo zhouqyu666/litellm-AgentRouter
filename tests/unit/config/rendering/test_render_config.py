@@ -223,3 +223,267 @@ class TestRenderConfig:
         assert len(parsed["model_list"]) == 1
         assert parsed["model_list"][0]["litellm_params"]["api_key"] == "sk-single"
         assert "router_settings" not in parsed
+
+
+class TestRenderConfigAnthropic:
+    """Tests for Anthropic model rendering."""
+
+    def test_anthropic_model_uses_anthropic_prefix(self):
+        """Anthropic models should use anthropic/ prefix."""
+        spec = ModelSpec(
+            key="claude",
+            alias="claude-sonnet",
+            upstream_model="claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key="sk-test",
+            drop_params=True,
+            streaming=True,
+        )
+
+        parsed = yaml.safe_load(config_text)
+        params = parsed["model_list"][0]["litellm_params"]
+        assert params["model"] == "anthropic/claude-sonnet-4-20250514"
+
+    def test_anthropic_model_no_custom_llm_provider(self):
+        """Anthropic models should NOT have custom_llm_provider."""
+        spec = ModelSpec(
+            key="claude",
+            upstream_model="claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+        )
+
+        parsed = yaml.safe_load(config_text)
+        params = parsed["model_list"][0]["litellm_params"]
+        assert "custom_llm_provider" not in params
+
+    def test_anthropic_model_no_headers(self):
+        """Anthropic models should NOT have headers block."""
+        spec = ModelSpec(
+            key="claude",
+            upstream_model="claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+        )
+
+        parsed = yaml.safe_load(config_text)
+        params = parsed["model_list"][0]["litellm_params"]
+        assert "headers" not in params
+
+    def test_anthropic_model_no_global_api_base(self):
+        """Anthropic models should NOT inherit global upstream_base (without node_proxy_base)."""
+        spec = ModelSpec(
+            key="claude",
+            upstream_model="claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+        )
+
+        parsed = yaml.safe_load(config_text)
+        params = parsed["model_list"][0]["litellm_params"]
+        assert "api_base" not in params
+
+    def test_anthropic_model_gets_node_proxy_base(self):
+        """Anthropic models should get api_base when node_proxy_base is set."""
+        spec = ModelSpec(
+            key="claude",
+            upstream_model="claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="http://127.0.0.1:4000/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+            node_proxy_base="http://127.0.0.1:4000",
+        )
+
+        parsed = yaml.safe_load(config_text)
+        params = parsed["model_list"][0]["litellm_params"]
+        assert params["api_base"] == "http://127.0.0.1:4000"
+
+    def test_anthropic_model_explicit_upstream_base_overrides_node_proxy(self):
+        """Anthropic model with explicit upstream_base should override node_proxy_base."""
+        spec = ModelSpec(
+            key="claude",
+            upstream_model="claude-sonnet-4-20250514",
+            upstream_base="https://my-anthropic-proxy.com/v1",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="http://127.0.0.1:4000/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+            node_proxy_base="http://127.0.0.1:4000",
+        )
+
+        parsed = yaml.safe_load(config_text)
+        params = parsed["model_list"][0]["litellm_params"]
+        assert params["api_base"] == "https://my-anthropic-proxy.com/v1"
+
+    def test_anthropic_model_explicit_upstream_base(self):
+        """Anthropic model with explicit upstream_base should set api_base."""
+        spec = ModelSpec(
+            key="claude",
+            upstream_model="claude-sonnet-4-20250514",
+            upstream_base="https://my-anthropic-proxy.com/v1",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+        )
+
+        parsed = yaml.safe_load(config_text)
+        params = parsed["model_list"][0]["litellm_params"]
+        assert params["api_base"] == "https://my-anthropic-proxy.com/v1"
+
+    def test_anthropic_model_with_api_key(self):
+        """Anthropic model should accept API key."""
+        spec = ModelSpec(
+            key="claude",
+            upstream_model="claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+            provider_api_keys={"anthropic": ["sk-ant-test"]},
+        )
+
+        parsed = yaml.safe_load(config_text)
+        params = parsed["model_list"][0]["litellm_params"]
+        assert params["api_key"] == "sk-ant-test"
+
+    def test_anthropic_already_prefixed_not_double_prefixed(self):
+        """Model already prefixed with anthropic/ should not get double prefix."""
+        spec = ModelSpec(
+            key="claude",
+            upstream_model="anthropic/claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+        )
+
+        parsed = yaml.safe_load(config_text)
+        assert parsed["model_list"][0]["litellm_params"]["model"] == "anthropic/claude-sonnet-4-20250514"
+
+
+class TestRenderConfigMixedProviders:
+    """Tests for mixed OpenAI + Anthropic rendering."""
+
+    def test_mixed_providers_both_rendered(self):
+        """OpenAI and Anthropic models should each use their own rendering."""
+        openai_spec = make_spec(key="gpt5", alias="gpt-5", upstream_model="gpt-5")
+        anthropic_spec = ModelSpec(
+            key="claude",
+            upstream_model="claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[openai_spec, anthropic_spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key="sk-test",
+            drop_params=True,
+            streaming=True,
+        )
+
+        parsed = yaml.safe_load(config_text)
+        entries = parsed["model_list"]
+        assert len(entries) == 2
+
+        gpt_entry = next(e for e in entries if e["model_name"] == "gpt-5")
+        claude_entry = next(e for e in entries if e["model_name"] == "claude-sonnet-4-20250514")
+
+        assert gpt_entry["litellm_params"]["model"] == "openai/gpt-5"
+        assert "custom_llm_provider" in gpt_entry["litellm_params"]
+        assert claude_entry["litellm_params"]["model"] == "anthropic/claude-sonnet-4-20250514"
+        assert "custom_llm_provider" not in claude_entry["litellm_params"]
+
+    def test_provider_api_keys_per_provider(self):
+        """Each provider should get its own API keys for load balancing."""
+        openai_spec = make_spec(key="gpt5", alias="gpt-5", upstream_model="gpt-5")
+        anthropic_spec = ModelSpec(
+            key="claude",
+            upstream_model="claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[openai_spec, anthropic_spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+            provider_api_keys={
+                "openai": ["sk-oai-1", "sk-oai-2"],
+                "anthropic": ["sk-ant-1", "sk-ant-2"],
+            },
+        )
+
+        parsed = yaml.safe_load(config_text)
+        entries = parsed["model_list"]
+        # 2 keys per provider × 1 model each = 4 total entries
+        assert len(entries) == 4
+
+        gpt_entries = [e for e in entries if e["model_name"] == "gpt-5"]
+        claude_entries = [e for e in entries if e["model_name"] == "claude-sonnet-4-20250514"]
+
+        assert len(gpt_entries) == 2
+        assert len(claude_entries) == 2
+
+        gpt_keys = [e["litellm_params"]["api_key"] for e in gpt_entries]
+        claude_keys = [e["litellm_params"]["api_key"] for e in claude_entries]
+
+        assert gpt_keys == ["sk-oai-1", "sk-oai-2"]
+        assert claude_keys == ["sk-ant-1", "sk-ant-2"]
+
+        # Should have router_settings for multi-key
+        assert parsed["router_settings"]["routing_strategy"] == "simple-shuffle"
+
+    def test_provider_api_keys_single_no_router(self):
+        """Single key per provider should NOT trigger router_settings."""
+        openai_spec = make_spec(key="gpt5", alias="gpt-5", upstream_model="gpt-5")
+        anthropic_spec = ModelSpec(
+            key="claude",
+            upstream_model="claude-sonnet-4-20250514",
+        )
+        config_text = render_config(
+            model_specs=[openai_spec, anthropic_spec],
+            global_upstream_base="https://agentrouter.org/v1",
+            master_key=None,
+            drop_params=True,
+            streaming=True,
+            provider_api_keys={
+                "openai": ["sk-oai-only"],
+                "anthropic": ["sk-ant-only"],
+            },
+        )
+
+        parsed = yaml.safe_load(config_text)
+        assert len(parsed["model_list"]) == 2
+        assert "router_settings" not in parsed

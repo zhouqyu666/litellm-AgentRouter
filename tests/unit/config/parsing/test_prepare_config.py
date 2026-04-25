@@ -123,6 +123,50 @@ class TestPrepareConfig:
         parsed = yaml.safe_load(config_text)
         assert parsed["model_list"][0]["litellm_params"]["api_base"] == "http://127.0.0.1:4000/v1"
 
+    def test_prepare_config_anthropic_gets_node_proxy_base(self, monkeypatch):
+        """Anthropic models should get node_proxy_base (without /v1) when node proxy enabled."""
+        monkeypatch.setenv("MODEL_CLAUDE_UPSTREAM_MODEL", "claude-sonnet-4-20250514")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+        args = SimpleNamespace(
+            config=None,
+            model_specs=[],
+            upstream_base=None,
+            master_key=None,
+            no_master_key=True,
+            drop_params=True,
+            streaming=True,
+            node_upstream_proxy_enabled=True,
+            print_config=False,
+        )
+
+        config_text, is_generated = prepare_config(args)
+        parsed = yaml.safe_load(config_text)
+        claude_entry = parsed["model_list"][0]
+        assert claude_entry["litellm_params"]["api_base"] == "http://127.0.0.1:4000"
+
+    def test_prepare_config_no_node_proxy_base_when_disabled(self, monkeypatch):
+        """Anthropic models should NOT get node_proxy_base when node proxy disabled."""
+        monkeypatch.setenv("MODEL_CLAUDE_UPSTREAM_MODEL", "claude-sonnet-4-20250514")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+        args = SimpleNamespace(
+            config=None,
+            model_specs=[],
+            upstream_base=None,
+            master_key=None,
+            no_master_key=True,
+            drop_params=True,
+            streaming=True,
+            node_upstream_proxy_enabled=False,
+            print_config=False,
+        )
+
+        config_text, is_generated = prepare_config(args)
+        parsed = yaml.safe_load(config_text)
+        claude_entry = parsed["model_list"][0]
+        assert "api_base" not in claude_entry["litellm_params"]
+
     def test_prepare_config_missing_env_errors(self, monkeypatch):
         """Missing environment configuration should exit with error."""
         for key in list(os.environ.keys()):
@@ -165,6 +209,81 @@ class TestPrepareConfig:
 
         with create_temp_config_if_needed(config_data, is_generated) as resolved_path:
             assert resolved_path == config_path
+
+    def test_prepare_config_anthropic_keys_passed(self, monkeypatch):
+        """Anthropic keys from env should be passed via provider_api_keys."""
+        monkeypatch.setenv("MODEL_CLAUDE_UPSTREAM_MODEL", "claude-sonnet-4-20250514")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+
+        args = SimpleNamespace(
+            config=None,
+            model_specs=[],
+            upstream_base=None,
+            master_key=None,
+            no_master_key=True,
+            drop_params=True,
+            streaming=True,
+            node_upstream_proxy_enabled=False,
+            print_config=False,
+        )
+
+        config_text, is_generated = prepare_config(args)
+        assert is_generated is True
+        parsed = yaml.safe_load(config_text)
+        claude_entry = parsed["model_list"][0]
+        assert claude_entry["litellm_params"]["model"] == "anthropic/claude-sonnet-4-20250514"
+        assert claude_entry["litellm_params"]["api_key"] == "sk-ant-test"
+
+    def test_prepare_config_mixed_providers_keys(self, monkeypatch):
+        """Both OpenAI and Anthropic keys should be passed to their respective models."""
+        monkeypatch.setenv("MODEL_GPT5_UPSTREAM_MODEL", "gpt-5")
+        monkeypatch.setenv("MODEL_CLAUDE_UPSTREAM_MODEL", "claude-sonnet-4-20250514")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-oai")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant")
+
+        args = SimpleNamespace(
+            config=None,
+            model_specs=[],
+            upstream_base=None,
+            master_key="sk-test",
+            no_master_key=False,
+            drop_params=True,
+            streaming=True,
+            node_upstream_proxy_enabled=False,
+            print_config=False,
+        )
+
+        config_text, is_generated = prepare_config(args)
+        parsed = yaml.safe_load(config_text)
+        entries = parsed["model_list"]
+
+        claude_entry = next(e for e in entries if "anthropic/" in e["litellm_params"]["model"])
+        gpt_entry = next(e for e in entries if "openai/" in e["litellm_params"]["model"])
+
+        assert claude_entry["litellm_params"]["api_key"] == "sk-ant"
+        assert gpt_entry["litellm_params"]["api_key"] == "sk-oai"
+
+    def test_prepare_config_custom_upstream_base(self, monkeypatch):
+        """Custom upstream_base from CLI should override node proxy."""
+        monkeypatch.setenv("MODEL_GPT5_UPSTREAM_MODEL", "gpt-5")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-custom")
+
+        args = SimpleNamespace(
+            config=None,
+            model_specs=[],
+            upstream_base="https://custom.api.example.com/v1",
+            master_key=None,
+            no_master_key=True,
+            drop_params=True,
+            streaming=True,
+            node_upstream_proxy_enabled=True,
+            print_config=False,
+        )
+
+        config_text, is_generated = prepare_config(args)
+        assert is_generated is True
+        parsed = yaml.safe_load(config_text)
+        assert parsed["model_list"][0]["litellm_params"]["api_base"] == "https://custom.api.example.com/v1"
 
     def test_prepare_config_missing_config_file(self):
         """Test error when config file doesn't exist."""

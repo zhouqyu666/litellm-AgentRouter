@@ -193,8 +193,8 @@ class TestMain:
             master_key="sk-local-master",
             drop_params=True,
             streaming=True,
-            api_key="sk-test-api-key-1234567890",
-            api_keys=None,
+            provider_api_keys={"openai": ["sk-test-api-key-1234567890"]},
+            node_proxy_base="http://127.0.0.1:4000",
         )
         mock_write.assert_called_once_with(
             "api_key: sk-1234567890abcdef\nmaster_key: master-key-secret",
@@ -278,6 +278,104 @@ class TestMain:
         captured = capsys.readouterr()
         assert "ERROR: Failed to generate configuration: Render failed" in captured.err
         mock_node_instance.stop.assert_called_once()
+        monkeypatch.delenv("NODE_UPSTREAM_PROXY_PID", raising=False)
+
+    @patch("src.config.entrypoint.os.execvp")
+    @patch("src.config.entrypoint.write_config_file")
+    @patch("src.config.entrypoint.render_config")
+    @patch("src.config.entrypoint.load_model_specs_from_env")
+    @patch("src.config.entrypoint.validate_environment")
+    @patch("socket.gethostbyname")
+    def test_main_docker_compose_mode(
+        self,
+        mock_gethostbyname,
+        mock_validate,
+        mock_load_specs,
+        mock_render,
+        mock_write,
+        mock_execvp,
+        monkeypatch,
+        capsys,
+    ):
+        """Test main() in docker-compose mode where node-proxy hostname resolves."""
+        monkeypatch.setenv("NODE_UPSTREAM_PROXY_ENABLE", "1")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-dc-test-1234567890")
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-local-master")
+        monkeypatch.setenv("LITELLM_HOST", "0.0.0.0")
+        monkeypatch.setenv("PORT", "4000")
+
+        mock_gethostbyname.return_value = "172.18.0.2"
+        mock_model_spec = MagicMock()
+        mock_load_specs.return_value = [mock_model_spec]
+        mock_render.return_value = "api_key: sk-dc-test-1234567890"
+
+        main()
+
+        mock_gethostbyname.assert_called_once_with("node-proxy")
+        mock_render.assert_called_once()
+        render_kwargs = mock_render.call_args[1]
+        assert render_kwargs["global_upstream_base"] == "http://node-proxy:4000/v1"
+        assert render_kwargs["node_proxy_base"] == "http://node-proxy:4000"
+
+        captured = capsys.readouterr()
+        assert "external Node proxy service" in captured.out
+
+    @patch("src.config.entrypoint.validate_environment")
+    @patch("src.config.entrypoint.NodeProxyProcess")
+    def test_main_node_start_runtime_error(
+        self,
+        mock_node_cls,
+        mock_validate,
+        monkeypatch,
+        capsys,
+    ):
+        """Test main exits when NodeProxyProcess.start() raises RuntimeError."""
+        mock_node_instance = MagicMock()
+        mock_node_instance.start.side_effect = RuntimeError("Node.js runtime not available")
+        mock_node_cls.return_value = mock_node_instance
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Node.js runtime not available" in captured.err
+
+    @patch("src.config.entrypoint.write_config_file")
+    @patch("src.config.entrypoint.render_config")
+    @patch("src.config.entrypoint.load_model_specs_from_env")
+    @patch("src.config.entrypoint.validate_environment")
+    @patch("src.config.entrypoint.NodeProxyProcess")
+    def test_main_test_mode_stops_node_process(
+        self,
+        mock_node_cls,
+        mock_validate,
+        mock_load_specs,
+        mock_render,
+        mock_write,
+        monkeypatch,
+        capsys,
+    ):
+        """Test ENTRYPOINT_TEST_MODE stops node process and exits cleanly."""
+        monkeypatch.setenv("ENTRYPOINT_TEST_MODE", "1")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-tm-1234567890")
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-local-master")
+        monkeypatch.setenv("LITELLM_HOST", "0.0.0.0")
+        monkeypatch.setenv("PORT", "4000")
+
+        mock_node_instance = MagicMock()
+        mock_node_instance.start.return_value.pid = 7777
+        mock_node_cls.return_value = mock_node_instance
+        mock_load_specs.return_value = [MagicMock()]
+        mock_render.return_value = "api_key: sk-test-tm-1234567890"
+
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+        assert exc_info.value.code == 0
+        mock_node_instance.stop.assert_called_once()
+        captured = capsys.readouterr()
+        assert "ENTRYPOINT_TEST_MODE" in captured.out
         monkeypatch.delenv("NODE_UPSTREAM_PROXY_PID", raising=False)
 
     @patch("src.config.entrypoint.write_config_file")

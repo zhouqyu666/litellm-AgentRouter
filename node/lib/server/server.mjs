@@ -2,6 +2,7 @@ import http from "node:http";
 import { logEvent } from "../utils/logger.mjs";
 import { createRequestHandler } from "../router/router.mjs";
 import { ClientPool } from "../client/client-pool.mjs";
+import { AnthropicClientPool } from "../client/anthropic-client-pool.mjs";
 
 export class NodeProxyServer {
   constructor({ config, logger }) {
@@ -12,10 +13,16 @@ export class NodeProxyServer {
       timeoutMs: config.timeoutMs,
       userAgent: config.userAgent,
     });
+    this.anthropicClientPool = new AnthropicClientPool({
+      baseURL: config.anthropicUpstreamBase,
+      timeoutMs: config.timeoutMs,
+    });
     this.server = http.createServer(
       createRequestHandler({
         clientResolver: (apiKey) => this.clientPool.get(apiKey),
         fallbackApiKey: config.fallbackApiKey,
+        anthropicClientResolver: (apiKey) => this.anthropicClientPool.get(apiKey),
+        anthropicFallbackApiKey: config.anthropicFallbackApiKey,
         logger,
       })
     );
@@ -35,6 +42,7 @@ export class NodeProxyServer {
           event: "ready",
           port: address?.port ?? this.config.port,
           upstream_base: this.config.upstreamBase,
+          anthropic_upstream_base: this.config.anthropicUpstreamBase,
         });
         resolve(address);
       };

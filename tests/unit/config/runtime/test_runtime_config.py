@@ -247,6 +247,20 @@ class TestMissingSettingError:
         error = MissingSettingError("KEY")
         assert isinstance(error, Exception)
 
+    def test_as_dict_with_overrides_merges(self):
+        """Test as_dict includes override values merged with environment."""
+        config = RuntimeConfig(overrides={"OVERRIDE_X": "val_x"})
+        env_dict = config.as_dict()
+        assert env_dict["OVERRIDE_X"] == "val_x"
+
+    def test_override_with_existing_overrides(self):
+        """Test override() merges with pre-existing overrides."""
+        config = RuntimeConfig(overrides={"PRE_EXISTING": "original"})
+        with config.override({"NEW_TEMP": "temp_value"}):
+            assert config.get_str("PRE_EXISTING") == "original"
+            assert config.get_str("NEW_TEMP") == "temp_value"
+        assert config.get_str("NEW_TEMP") is None
+
     def test_override_context_manager_cleanup_on_exception(self):
         """Test that override context manager cleans up properly on exception."""
         config = RuntimeConfig()

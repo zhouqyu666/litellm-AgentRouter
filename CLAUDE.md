@@ -27,6 +27,8 @@
 - **多 Key 负载均衡**: 通过 `OPENAI_API_KEYS`（逗号分隔）或 `OPENAI_API_KEY`（含逗号时自动拆分）配置多个 API Key，LiteLLM 使用 `simple-shuffle` 策略在 Key 间轮询分发请求。
 - **Node 上游代理**: agentrouter.org 拒绝非 Node.js SDK 客户端，所有上游请求必须通过 Node 代理转发。Node 代理通过 `ClientPool` 为每个 API Key 缓存独立的 OpenAI SDK 客户端实例。
 - **动态 API Key 路由**: Node 代理从请求的 `Authorization` 头提取 Bearer Token 作为 API Key，不再使用固定配置的 Key。`buildForwardHeaders` 不转发来源请求的 `User-Agent`，确保上游始终看到 OpenAI SDK 的 User-Agent。
+- **统一 OpenAI 兼容路由**: 所有模型（包括 Claude）统一通过 OpenAI 兼容路径（`/v1/chat/completions`）转发，不使用 Anthropic 原生 API。`models.py` 中的 `_PROVIDER_PATTERNS` 不再映射 `claude→anthropic`。
+- **Master Key 环境变量**: `LITELLM_MASTER_KEY` 环境变量控制客户端认证，`parsing.py` 和 `cli.py` 均从该环境变量读取（有 `sk-local-master` 回退默认值）。
 
 ## 关键文件
 
@@ -37,6 +39,7 @@
 - `node/lib/client/client-pool.mjs` — `ClientPool` 按 API Key 缓存 OpenAI SDK 客户端
 - `node/lib/router/router.mjs` — 提取 Bearer Token，动态解析 API Key
 - `node/lib/router/routes.mjs` — 接受 `clientResolver` 函数动态创建客户端
+- `node/lib/client/anthropic-client-pool.mjs` — `AnthropicClientPool` 按 API Key 缓存 Anthropic SDK 客户端（使用 `authToken` 发 Bearer 头）
 - `node/lib/utils/http-utils.mjs` — `buildForwardHeaders` 仅转发 `X-Request-ID`，不转发 `User-Agent`
 - `test_keys_and_loadbalance.py` — Key 验证和负载均衡测试脚本
 
@@ -49,3 +52,6 @@
 - 修改 Node 代理时，确保 `buildForwardHeaders` 不转发 `User-Agent`（agentrouter.org 会拒绝非 SDK 的 User-Agent）。
 - 修改多 Key 逻辑时，注意优先级：`OPENAI_API_KEYS` > `OPENAI_API_KEY`（含逗号）> `OPENAI_API_KEY`（单 Key）。
 - `--upstream-base` CLI 参数默认为 `None`，设置后会绕过 Node 代理直连上游（仅用于自定义端点）。
+- 本地开发时 LiteLLM 和 Node 代理使用不同端口（`.env` 中 `PORT=8000`，Node 代理固定 `4000`），避免端口冲突。Docker 内部 LiteLLM 固定使用 `4000`（由 `entrypoint.py` 控制），不存在冲突。
+- `master_key` 优先级：CLI `--master-key` > 环境变量 `LITELLM_MASTER_KEY` > 默认值 `sk-local-master`。
+- 所有模型（包括 Claude）统一走 OpenAI 兼容路径（`openai/` provider），不要在 `models.py` 的 `_PROVIDER_PATTERNS` 中添加模型名到 provider 的映射。

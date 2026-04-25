@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentRouter Admin</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f0f2f5;color:#333}
+.container{max-width:1000px;margin:0 auto;padding:20px}
+.header{background:#1a1a2e;color:#fff;padding:20px;border-radius:8px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center}
+.header h1{font-size:20px;font-weight:600}
+.header .status{font-size:13px;opacity:.8}
+.card{background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.card h2{font-size:16px;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #eee;color:#1a1a2e}
+.login-wrap{display:flex;justify-content:center;padding:60px 0}
+.login-box{background:#fff;border-radius:8px;padding:40px;width:360px;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.login-box h2{text-align:center;margin-bottom:24px;color:#1a1a2e}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:13px;margin-bottom:4px;color:#666}
+.form-group input,.form-group select{width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px}
+.form-group input:focus,.form-group select:focus{outline:none;border-color:#4361ee}
+.btn{padding:8px 16px;border:none;border-radius:6px;cursor:pointer;font-size:14px;transition:opacity .2s}
+.btn:hover{opacity:.85}
+.btn-primary{background:#4361ee;color:#fff}
+.btn-danger{background:#e74c3c;color:#fff}
+.btn-success{background:#2ecc71;color:#fff}
+.btn-sm{padding:4px 10px;font-size:12px}
+.btn-block{width:100%;padding:10px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #eee;font-size:14px}
+th{background:#f8f9fa;font-weight:600;color:#666;font-size:13px}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:500}
+.badge-openai{background:#10a37f;color:#fff}
+.badge-anthropic{background:#d97706;color:#fff}
+.tabs{display:flex;gap:0;margin-bottom:16px;border-bottom:2px solid #eee}
+.tab{padding:8px 20px;cursor:pointer;font-size:14px;border-bottom:2px solid transparent;margin-bottom:-2px;color:#666}
+.tab.active{color:#4361ee;border-bottom-color:#4361ee;font-weight:600}
+.key-item{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border:1px solid #eee;border-radius:6px;margin-bottom:8px}
+.key-item code{font-size:13px;color:#555}
+.actions{display:flex;gap:8px}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:100}
+.modal{background:#fff;border-radius:8px;padding:24px;width:420px;max-width:90vw}
+.modal h3{margin-bottom:16px;color:#1a1a2e}
+.empty{text-align:center;color:#999;padding:20px;font-size:14px}
+.toast{position:fixed;top:20px;right:20px;padding:12px 20px;border-radius:6px;color:#fff;font-size:14px;z-index:200;animation:fadeIn .3s}
+.toast-success{background:#2ecc71}
+.toast-error{background:#e74c3c}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Toast -->
+  <div v-if="toast.show" :class="['toast','toast-'+toast.type]">{{ toast.message }}</div>
+
+  <!-- Login -->
+  <div v-if="!isLoggedIn" class="login-wrap">
+    <div class="login-box">
+      <h2>AgentRouter Admin</h2>
+      <div v-if="authEnabled===false" style="text-align:center;color:#999;margin-bottom:12px">认证未启用</div>
+      <div class="form-group">
+        <label>用户名</label>
+        <input v-model="loginForm.username" @keyup.enter="doLogin" placeholder="admin">
+      </div>
+      <div class="form-group">
+        <label>密码</label>
+        <input v-model="loginForm.password" type="password" @keyup.enter="doLogin" placeholder="••••••">
+      </div>
+      <button class="btn btn-primary btn-block" @click="doLogin" :disabled="loginLoading">
+        {{ loginLoading ? '登录中...' : '登录' }}
+      </button>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div v-else class="container">
+    <div class="header">
+      <h1>AgentRouter Admin</h1>
+      <div class="actions">
+        <button class="btn btn-success btn-sm" @click="reloadConfig">重载配置</button>
+        <button class="btn btn-danger btn-sm" @click="doLogout">退出</button>
+      </div>
+    </div>
+
+    <!-- Models Section -->
+    <div class="card">
+      <h2>模型管理 <button class="btn btn-primary btn-sm" style="float:right" @click="showAddModel=true">+ 添加模型</button></h2>
+      <table v-if="config.models && config.models.length">
+        <thead>
+          <tr><th>Key</th><th>上游模型</th><th>Provider</th><th>推理强度</th><th>操作</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="m in config.models" :key="m.key">
+            <td><strong>{{ m.key }}</strong></td>
+            <td>{{ m.upstream_model }}</td>
+            <td><span :class="['badge','badge-'+m.provider]">{{ m.provider }}</span></td>
+            <td>{{ m.reasoning_effort || '-' }}</td>
+            <td class="actions">
+              <button class="btn btn-primary btn-sm" @click="editModel(m)">编辑</button>
+              <button class="btn btn-danger btn-sm" @click="removeModel(m.key)">删除</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="empty">暂无模型配置</div>
+    </div>
+
+    <!-- API Keys Section -->
+    <div class="card">
+      <h2>API Key 管理</h2>
+      <div class="tabs">
+        <div :class="['tab',{active:keyTab==='openai'}]" @click="keyTab='openai'">OpenAI</div>
+        <div :class="['tab',{active:keyTab==='anthropic'}]" @click="keyTab='anthropic'">Anthropic</div>
+      </div>
+      <div v-if="currentKeys.length">
+        <div v-for="(k,i) in currentKeys" :key="i" class="key-item">
+          <code>{{ k }}</code>
+          <button class="btn btn-danger btn-sm" @click="removeKey(i)">删除</button>
+        </div>
+      </div>
+      <div v-else class="empty">暂无 {{ keyTab }} API Key</div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <input v-model="newKey" :placeholder="'sk-' + (keyTab==='openai'?'...':'ant-...')" style="flex:1;padding:8px 12px;border:1px solid #ddd;border-radius:6px">
+        <button class="btn btn-primary btn-sm" @click="addKey">添加 Key</button>
+      </div>
+    </div>
+
+    <!-- Settings Section -->
+    <div class="card">
+      <h2>当前配置</h2>
+      <table v-if="Object.keys(config.settings||{}).length">
+        <thead><tr><th>配置项</th><th>值</th></tr></thead>
+        <tbody>
+          <tr v-for="(v,k) in config.settings" :key="k">
+            <td>{{ k }}</td><td>{{ v }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="empty">无配置信息</div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Model Modal -->
+  <div v-if="showAddModel||editingModel" class="modal-overlay" @click.self="closeModal">
+    <div class="modal">
+      <h3>{{ editingModel ? '编辑模型' : '添加模型' }}</h3>
+      <div class="form-group">
+        <label>模型 Key (大写字母/数字/下划线)</label>
+        <input v-model="modelForm.key" :disabled="!!editingModel" placeholder="DEEPSEEK">
+      </div>
+      <div class="form-group">
+        <label>上游模型名称</label>
+        <input v-model="modelForm.upstream_model" placeholder="deepseek-v3.2">
+      </div>
+      <div class="form-group">
+        <label>Provider (留空自动检测)</label>
+        <select v-model="modelForm.provider">
+          <option value="">自动检测</option>
+          <option value="openai">OpenAI</option>
+          <option value="anthropic">Anthropic</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>推理强度 (可选)</label>
+        <select v-model="modelForm.reasoning_effort">
+          <option value="">不设置</option>
+          <option value="none">none</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+        </select>
+      </div>
+      <div class="actions" style="justify-content:flex-end;margin-top:20px">
+        <button class="btn" @click="closeModal">取消</button>
+        <button class="btn btn-primary" @click="saveModel" :disabled="savingModel">
+          {{ savingModel ? '保存中...' : '保存' }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const {createApp,ref,reactive,computed,onMounted} = Vue;
+
+createApp({
+  setup(){
+    const token = ref(localStorage.getItem('admin_token')||'');
+    const authEnabled = ref(null);
+    const config = reactive({models:[],api_keys:{openai:[],anthropic:[]},settings:{}});
+    const keyTab = ref('openai');
+    const loginForm = reactive({username:'',password:''});
+    const loginLoading = ref(false);
+    const showAddModel = ref(false);
+    const editingModel = ref(null);
+    const modelForm = reactive({key:'',upstream_model:'',provider:'',reasoning_effort:''});
+    const savingModel = ref(false);
+    const newKey = ref('');
+    const toast = reactive({show:false,message:'',type:'success'});
+    const saving = ref(false);
+
+    const isLoggedIn = computed(()=>!!token.value);
+    const currentKeys = computed(()=>(config.api_keys&&config.api_keys[keyTab.value])||[]);
+
+    function showToast(msg,type='success'){
+      toast.message=msg;toast.type=type;toast.show=true;
+      setTimeout(()=>{toast.show=false},3000);
+    }
+
+    async function api(path,opts={}){
+      const headers={'Content-Type':'application/json'};
+      if(token.value) headers['Authorization']='Bearer '+token.value;
+      try{
+        const resp=await fetch('/admin/api'+path,{...opts,headers});
+        if(resp.status===401){
+          token.value='';localStorage.removeItem('admin_token');
+          showToast('Session expired','error');throw new Error('Unauthorized');
+        }
+        const data=await resp.json();
+        if(!resp.ok) throw new Error(data.detail||'Request failed');
+        return data;
+      }catch(e){
+        if(e.message!=='Unauthorized') showToast(e.message,'error');
+        throw e;
+      }
+    }
+
+    async function checkAuth(){
+      try{
+        const data=await api('/auth/status');
+        authEnabled.value=data.enabled;
+        if(!data.enabled){
+          // Auth disabled — use stored token or get a fresh one
+          const stored=localStorage.getItem('admin_token');
+          if(stored){token.value=stored;}
+          else{
+            const resp=await fetch('/admin/api/login',{
+              method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({username:'',password:''})
+            });
+            const ld=await resp.json();
+            if(ld.token){token.value=ld.token;localStorage.setItem('admin_token',ld.token);}
+          }
+        }
+      }catch(e){}
+    }
+
+    async function doLogin(){
+      loginLoading.value=true;
+      try{
+        const resp=await fetch('/admin/api/login',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(loginForm)
+        });
+        const data=await resp.json();
+        if(resp.ok&&data.token){
+          token.value=data.token;
+          localStorage.setItem('admin_token',data.token);
+          loadConfig();
+        }else{
+          showToast(data.detail||'Login failed','error');
+        }
+      }catch(e){showToast('Login failed','error')}
+      loginLoading.value=false;
+    }
+
+    function doLogout(){
+      token.value='';
+      localStorage.removeItem('admin_token');
+    }
+
+    async function loadConfig(){
+      try{
+        const data=await api('/config');
+        Object.assign(config,data);
+      }catch(e){}
+    }
+
+    async function reloadConfig(){
+      try{
+        const data=await api('/reload',{method:'POST'});
+        showToast('配置已重载: 删除 '+data.deleted+', 新增 '+data.added);
+        loadConfig();
+      }catch(e){}
+    }
+
+    function editModel(m){
+      editingModel.value=m;
+      modelForm.key=m.key;
+      modelForm.upstream_model=m.upstream_model;
+      modelForm.provider=m.provider||'';
+      modelForm.reasoning_effort=m.reasoning_effort||'';
+    }
+
+    function closeModal(){
+      showAddModel.value=false;
+      editingModel.value=null;
+      modelForm.key='';modelForm.upstream_model='';modelForm.provider='';modelForm.reasoning_effort='';
+    }
+
+    async function saveModel(){
+      if(!modelForm.key||!modelForm.upstream_model){
+        showToast('Key 和模型名称不能为空','error');return;
+      }
+      savingModel.value=true;
+      try{
+        const body={
+          key:modelForm.key,
+          upstream_model:modelForm.upstream_model,
+          provider:modelForm.provider||null,
+          reasoning_effort:modelForm.reasoning_effort||null,
+        };
+        if(editingModel.value){
+          await api('/models/'+modelForm.key,{method:'PUT',body:JSON.stringify(body)});
+          showToast('模型已更新');
+        }else{
+          await api('/models',{method:'POST',body:JSON.stringify(body)});
+          showToast('模型已添加');
+        }
+        closeModal();
+        loadConfig();
+      }catch(e){}
+      savingModel.value=false;
+    }
+
+    async function removeModel(key){
+      if(!confirm('确定删除模型 '+key+' ?'))return;
+      try{
+        await api('/models/'+key,{method:'DELETE'});
+        showToast('模型已删除');
+        loadConfig();
+      }catch(e){}
+    }
+
+    async function addKey(){
+      if(!newKey.value.trim()){showToast('请输入 API Key','error');return;}
+      try{
+        await api('/keys/'+keyTab.value,{method:'POST',body:JSON.stringify({key:newKey.value.trim()})});
+        newKey.value='';
+        showToast('Key 已添加');
+        loadConfig();
+      }catch(e){}
+    }
+
+    async function removeKey(index){
+      const provider=keyTab.value;
+      if(!confirm('确定删除第 '+(index+1)+' 个 Key ?'))return;
+      try{
+        await api('/keys/'+provider+'/'+index,{method:'DELETE'});
+        showToast('Key 已删除');
+        loadConfig();
+      }catch(e){}
+    }
+
+    onMounted(async()=>{
+      await checkAuth();
+      if(isLoggedIn.value) loadConfig();
+    });
+
+    return{
+      token,authEnabled,config,keyTab,loginForm,loginLoading,isLoggedIn,
+      showAddModel,editingModel,modelForm,savingModel,newKey,toast,
+      currentKeys,doLogin,doLogout,loadConfig,reloadConfig,editModel,
+      closeModal,saveModel,removeModel,addKey,removeKey,showToast
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>

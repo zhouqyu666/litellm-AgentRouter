@@ -37,7 +37,7 @@ def install_middlewares(app, model_specs: List[ModelSpec]) -> None:
 
     config = TelemetryConfig(
         toggle=EnvToggle(),
-        alias_resolver=lambda alias: alias_lookup.get(alias, f"openai/{alias}"),
+        alias_resolver=lambda alias: alias_lookup.get(alias, alias),
         sinks=sinks,
         reasoning_policy=NoOpReasoningPolicy(),
     )

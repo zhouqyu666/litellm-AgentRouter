@@ -279,6 +279,21 @@ class TestRegisterNodeProxyCleanup:
             registered_handlers[0]()
             mock_kill.assert_called_once_with(5555, signal.SIGTERM)
 
+    def test_cleanup_handler_ignores_os_error(self, monkeypatch):
+        """Cleanup handler should silently handle OSError (e.g., process already dead)."""
+        monkeypatch.setenv("NODE_UPSTREAM_PROXY_PID", "5555")
+        registered_handlers: list = []
+
+        def fake_register(func):
+            registered_handlers.append(func)
+
+        with patch("src.utils.atexit.register", fake_register):
+            register_node_proxy_cleanup()
+
+        assert registered_handlers
+        with patch("src.utils.os.kill", side_effect=OSError("No such process")):
+            registered_handlers[0]()  # Should not raise
+
     def test_ignores_invalid_pid(self, monkeypatch):
         """Non-numeric PIDs should not register a handler."""
         monkeypatch.setenv("NODE_UPSTREAM_PROXY_PID", "not-a-pid")
@@ -291,6 +306,21 @@ class TestRegisterNodeProxyCleanup:
             register_node_proxy_cleanup()
 
         assert not registered_handlers
+
+
+    def test_validate_prereqs_node_version_subprocess_error(self):
+        """Test validate_prereqs when node --version subprocess fails."""
+        with patch.dict("sys.modules", {
+            "litellm": MagicMock(),
+            "litellm.proxy": MagicMock(),
+            "litellm.proxy.proxy_cli": MagicMock(),
+        }), patch("shutil.which", return_value="/usr/bin/node"), \
+                patch("socket.gethostbyname") as mock_socket, \
+                patch("src.utils.subprocess.run", side_effect=subprocess.SubprocessError("fail")):
+            import socket
+            mock_socket.side_effect = socket.gaierror("Name or service not known")
+            with pytest.raises(SystemExit):
+                validate_prereqs()
 
 
 def test_create_temp_config_type_error():

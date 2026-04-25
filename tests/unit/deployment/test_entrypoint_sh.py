@@ -38,7 +38,7 @@ def _base_env(app_dir: Path) -> dict[str, str]:
 
 def _run_entrypoint(env: dict[str, str]) -> tuple[int, str, str]:
     proc = subprocess.run(
-        ["python", "-m", "src.config.entrypoint"],
+        ["python3", "-m", "src.config.entrypoint"],
         cwd=REPO_ROOT,
         env=env,
         text=True,

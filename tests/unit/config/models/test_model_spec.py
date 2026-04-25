@@ -78,6 +78,31 @@ class TestModelSpecValidation:
         )
         assert spec.upstream_base == "https://custom.api.com/v1"
 
+    def test_model_spec_provider_auto_detected_openai(self):
+        """Provider should auto-detect to openai for OpenAI models."""
+        spec = ModelSpec(key="test", upstream_model="gpt-5")
+        assert spec.provider == "openai"
+
+    def test_model_spec_provider_auto_detected_anthropic(self):
+        """Provider should auto-detect to anthropic for Claude models."""
+        spec = ModelSpec(key="test", upstream_model="claude-sonnet-4-20250514")
+        assert spec.provider == "anthropic"
+
+    def test_model_spec_provider_explicit_override(self):
+        """Explicit provider should override auto-detection."""
+        spec = ModelSpec(key="test", upstream_model="gpt-5", provider="anthropic")
+        assert spec.provider == "anthropic"
+
+    def test_model_spec_api_key(self):
+        """Per-model API key should be stored on the spec."""
+        spec = ModelSpec(key="test", upstream_model="gpt-5", api_key="sk-per-model")
+        assert spec.api_key == "sk-per-model"
+
+    def test_model_spec_api_key_default_none(self):
+        """api_key should default to None when not provided."""
+        spec = ModelSpec(key="test", upstream_model="gpt-5")
+        assert spec.api_key is None
+
     def test_model_spec_post_init(self):
         """Test __post_init__ method for legacy compatibility."""
         spec = ModelSpec(key="test", alias="test-alias", upstream_model="gpt-4")

@@ -144,6 +144,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--anthropic-api-key",
+        dest="anthropic_api_key",
+        default=os.getenv("ANTHROPIC_API_KEY"),
+        help="Anthropic API key for Anthropic models (env: ANTHROPIC_API_KEY).",
+    )
+    parser.add_argument(
         "--model-spec",
         dest="model_specs",
         action="append",

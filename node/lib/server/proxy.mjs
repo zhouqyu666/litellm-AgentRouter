@@ -16,6 +16,7 @@ export function createNodeUpstreamProxy({
         event: "startup",
         port: config.port,
         upstream_base: config.upstreamBase,
+        anthropic_upstream_base: config.anthropicUpstreamBase,
         timeout_ms: config.timeoutMs,
       });
       return address;

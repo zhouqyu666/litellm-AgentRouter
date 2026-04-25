@@ -8,6 +8,33 @@ from ..config.config import runtime_config
 from ..utils import build_user_agent
 
 
+def _load_dotenv_value(key: str, default: str | None = None) -> str | None:
+    """Load a value from .env file, bypassing system environment variables.
+
+    This is needed because runtime_config respects system env vars,
+    but for Node proxy we want .env values to take precedence.
+    """
+    # Find .env file
+    script_dir = Path(__file__).resolve().parents[2]
+    cwd = Path.cwd()
+
+    for env_path in (script_dir / ".env", cwd / ".env"):
+        if not env_path.is_file():
+            continue
+        try:
+            for line in env_path.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == key:
+                    return v.strip().strip("'\"")
+        except Exception:
+            pass
+
+    return default
+
+
 class NodeProxyProcess:
     """Manage the Node upstream proxy subprocess."""
 
@@ -26,10 +53,42 @@ class NodeProxyProcess:
 
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
-        env.setdefault("OPENAI_BASE_URL", runtime_config.get_str("OPENAI_BASE_URL", "https://agentrouter.org/v1"))
-        api_key = runtime_config.get_str("OPENAI_API_KEY")
-        if api_key:
-            env.setdefault("OPENAI_API_KEY", api_key)
+
+        # Load from .env file (bypassing system env vars) for Node proxy config
+        openai_base = _load_dotenv_value("OPENAI_BASE_URL")
+        if openai_base:
+            env["OPENAI_BASE_URL"] = openai_base
+        else:
+            env.setdefault("OPENAI_BASE_URL", "https://agentrouter.org/v1")
+
+        # Handle OpenAI API keys
+        openai_keys = _load_dotenv_value("OPENAI_API_KEYS")
+        openai_key = _load_dotenv_value("OPENAI_API_KEY")
+        if openai_keys:
+            first_key = openai_keys.split(",")[0].strip()
+            env["OPENAI_API_KEY"] = first_key
+        elif openai_key:
+            env["OPENAI_API_KEY"] = openai_key
+
+        # Handle Anthropic API keys
+        anthropic_keys = _load_dotenv_value("ANTHROPIC_API_KEYS")
+        anthropic_key = _load_dotenv_value("ANTHROPIC_API_KEY")
+        if anthropic_keys:
+            first_key = anthropic_keys.split(",")[0].strip()
+            env["ANTHROPIC_API_KEY"] = first_key
+        elif anthropic_key:
+            env["ANTHROPIC_API_KEY"] = anthropic_key
+        # Fallback to OpenAI key if no Anthropic key (unified proxy)
+        elif not env.get("ANTHROPIC_API_KEY"):
+            fallback = openai_keys.split(",")[0].strip() if openai_keys else openai_key
+            if fallback:
+                env["ANTHROPIC_API_KEY"] = fallback
+
+        # Anthropic base URL - load from .env, override system env
+        anthropic_base = _load_dotenv_value("ANTHROPIC_BASE_URL")
+        if anthropic_base:
+            env["ANTHROPIC_BASE_URL"] = anthropic_base
+
         env["NODE_USER_AGENT"] = build_user_agent()
         return env
 

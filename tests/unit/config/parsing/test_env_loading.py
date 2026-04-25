@@ -105,6 +105,44 @@ class TestLoadModelSpecsFromEnv:
         assert [spec.key for spec in specs] == ["alpha", "middle", "zeta"]
 
 
+    def test_anthropic_model_auto_detected(self, monkeypatch):
+        """Claude model should auto-detect as anthropic provider."""
+        monkeypatch.setenv("MODEL_CLAUDE_UPSTREAM_MODEL", "claude-sonnet-4-20250514")
+
+        specs = load_model_specs_from_env()
+        assert len(specs) == 1
+        assert specs[0].provider == "anthropic"
+        assert specs[0].alias == "claude-sonnet-4-20250514"
+
+    def test_explicit_provider_env_var(self, monkeypatch):
+        """MODEL_<KEY>_PROVIDER should override auto-detection."""
+        monkeypatch.setenv("MODEL_CUSTOM_UPSTREAM_MODEL", "gpt-5")
+        monkeypatch.setenv("MODEL_CUSTOM_PROVIDER", "anthropic")
+
+        specs = load_model_specs_from_env()
+        assert specs[0].provider == "anthropic"
+
+    def test_per_model_api_key_env_var(self, monkeypatch):
+        """MODEL_<KEY>_API_KEY should be stored on the spec."""
+        monkeypatch.setenv("MODEL_CLAUDE_UPSTREAM_MODEL", "claude-sonnet-4-20250514")
+        monkeypatch.setenv("MODEL_CLAUDE_API_KEY", "sk-ant-per-model")
+
+        specs = load_model_specs_from_env()
+        assert specs[0].api_key == "sk-ant-per-model"
+
+    def test_mixed_openai_and_anthropic(self, monkeypatch):
+        """Mixed OpenAI and Anthropic models from environment."""
+        monkeypatch.setenv("MODEL_GPT5_UPSTREAM_MODEL", "gpt-5")
+        monkeypatch.setenv("MODEL_CLAUDE_UPSTREAM_MODEL", "claude-sonnet-4-20250514")
+
+        specs = load_model_specs_from_env()
+        assert len(specs) == 2
+        claude_spec = next(s for s in specs if s.key == "claude")
+        gpt_spec = next(s for s in specs if s.key == "gpt5")
+        assert claude_spec.provider == "anthropic"
+        assert gpt_spec.provider == "openai"
+
+
 class TestLoadModelSpecsFromCli:
     """Tests for CLI-based model spec loading."""
 

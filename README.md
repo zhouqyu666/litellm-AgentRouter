@@ -23,9 +23,10 @@ LiteLLM AgentRouter 是一个双层代理系统，为 agentrouter.org 等上游 
 
 ### 核心功能
 
-- 多模型路由：GPT-5、DeepSeek v3.2、Grok Code Fast-1、GLM-4.6 等
+- 多模型路由：GPT-5、DeepSeek v3.2、Grok Code Fast-1、GLM-5.1、Claude Haiku 4.5、Claude Opus 4.6 等
 - 多 API Key 负载均衡：`simple-shuffle` 轮询策略 + 自动故障转移
-- OpenAI 兼容接口：任何支持 OpenAI API 的客户端均可直接接入
+- OpenAI 兼容接口：任何支持 OpenAI API 的客户端均可直接接入（包括 Claude 模型）
+- 统一路由架构：所有模型（包括 Claude）通过 OpenAI 兼容路径转发，简化部署
 - 推理强度控制：按模型配置 `none` / `low` / `medium` / `high`
 - 请求遥测：结构化 JSON 日志，可插拔 Sink 架构
 - 容器化部署：单镜像双服务，Docker Compose 一键启动
@@ -110,18 +111,18 @@ pytest
 
 ### 快速开始
 
-启动服务后，代理默认监听 `http://localhost:4000`，使用任何 OpenAI 兼容客户端即可接入：
+启动服务后，代理默认监听 `http://localhost:8000`（由 `.env` 中 `PORT` 控制），使用任何 OpenAI 兼容客户端即可接入：
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="sk-local-master",       # Master Key（见 .env 中的 LITELLM_MASTER_KEY）
-    base_url="http://localhost:4000"  # 代理地址
+    api_key="sk-zhouhuozhou",         # Master Key（见 .env 中的 LITELLM_MASTER_KEY）
+    base_url="http://localhost:8000"   # 代理地址
 )
 
 response = client.chat.completions.create(
-    model="gpt-5",
+    model="glm-5.1",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 print(response.choices[0].message.content)
@@ -134,8 +135,8 @@ print(response.choices[0].message.content)
 #### 核心配置
 
 ```bash
-PORT=4000                          # 代理端口（默认: 4000）
-LITELLM_MASTER_KEY=sk-local-master # 客户端认证 Master Key
+PORT=8000                          # 代理端口（默认: 8000，Docker 内部固定 4000）
+LITELLM_MASTER_KEY=sk-zhouhuozhou  # 客户端认证 Master Key（从环境变量读取）
 STREAMING_ENABLE=true              # 启用流式响应（默认: true）
 TELEMETRY_ENABLE=1                 # 启用遥测日志（默认: 1）
 ```
@@ -186,9 +187,17 @@ MODEL_DEEPSEEK_REASONING_EFFORT=medium
 MODEL_GROK_UPSTREAM_MODEL=grok-code-fast-1
 MODEL_GROK_REASONING_EFFORT=high
 
-# GLM-4.6 配置（不支持 reasoning_effort）
-MODEL_GLM_UPSTREAM_MODEL=glm-4.6
+# GLM-5.1 配置（不支持 reasoning_effort）
+MODEL_GLM_UPSTREAM_MODEL=glm-5.1
+
+# Claude Haiku 4.5 配置
+MODEL_CLAUDE_HAIKU_UPSTREAM_MODEL=claude-haiku-4-5-20251001
+
+# Claude Opus 4.6 配置
+MODEL_CLAUDE_OPUS_UPSTREAM_MODEL=claude-opus-4-6
 ```
+
+> **注意**: 所有模型（包括 Claude）统一通过 OpenAI 兼容路径转发，无需单独配置 Anthropic provider。
 
 #### 单模型配置
 
@@ -217,17 +226,17 @@ MODEL_DEEPSEEK_REASONING_EFFORT=high                      # 覆盖推理强度
 ```python
 from openai import OpenAI
 
-client = OpenAI(api_key="sk-local-master", base_url="http://localhost:4000")
+client = OpenAI(api_key="sk-zhouhuozhou", base_url="http://localhost:8000")
 
-# 使用 GPT-5
+# 使用 DeepSeek v3.2
 response = client.chat.completions.create(
-    model="gpt-5",
+    model="deepseek-v3.2",
     messages=[{"role": "user", "content": "用 Python 写一个快速排序"}]
 )
 
-# 使用 GLM-4.6
+# 使用 Claude Haiku 4.5
 response = client.chat.completions.create(
-    model="glm-4.6",
+    model="claude-haiku-4-5-20251001",
     messages=[{"role": "user", "content": "你好"}]
 )
 ```
@@ -235,11 +244,11 @@ response = client.chat.completions.create(
 #### cURL
 
 ```bash
-curl http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer sk-local-master" \
+curl http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer sk-zhouhuozhou" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gpt-5",
+    "model": "claude-haiku-4-5-20251001",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
@@ -250,10 +259,10 @@ curl http://localhost:4000/v1/chat/completions \
 
 ```json
 {
-  "model_display_name": "ChatGPT 5 (AgentRouter - local proxy)",
-  "model": "gpt-5",
-  "base_url": "http://localhost:4000",
-  "api_key": "sk-local-master",
+  "model_display_name": "Claude Haiku (AgentRouter - local proxy)",
+  "model": "claude-haiku-4-5-20251001",
+  "base_url": "http://localhost:8000",
+  "api_key": "sk-zhouhuozhou",
   "provider": "generic-chat-completion-api",
   "max_tokens": 8192
 }
@@ -328,7 +337,7 @@ litellm-AgentRouter/
     ▼
 ┌─────────────────────────────────────┐
 │  LiteLLM Python 代理                 │
-│  (端口 4000 / 8000)                  │
+│  (端口 8000)                         │
 │                                      │
 │  - 客户端认证（Master Key）          │
 │  - 模型路由（根据 model 参数）       │
@@ -345,6 +354,7 @@ litellm-AgentRouter/
 │  - 提取 Bearer Token 作为 API Key    │
 │  - ClientPool 按 Key 缓存 SDK 客户端│
 │  - 使用 OpenAI SDK 正确 User-Agent   │
+│  - 所有模型统一 OpenAI 兼容路由      │
 │  - 支持流式 / 非流式响应             │
 └──────────────┬──────────────────────┘
                │
@@ -577,6 +587,31 @@ agentrouter.org 首次请求可能有冷启动延迟（30 秒以上）。解决�
 
 </details>
 
+<details>
+<summary>启动报 "No module named 'websockets.asyncio'" 怎么办？</summary>
+
+LiteLLM 依赖 `websockets>=14.0`（支持 asyncio 子模块），但系统可能安装了旧版本。解决方法：
+
+```bash
+pip install --force-reinstall --no-cache-dir 'websockets>=14.0'
+```
+
+如果系统有多个 Python 版本，确保安装到正确的路径。
+
+</details>
+
+<details>
+<summary>本地开发端口 4000 报 EADDRINUSE 怎么办？</summary>
+
+Node 代理和 LiteLLM 不能使用同一端口。本地开发时：
+- Node 代理固定使用端口 `4000`（内部转发）
+- LiteLLM 使用 `.env` 中的 `PORT`（默认 `8000`）
+- 客户端连接 LiteLLM 端口（`8000`）
+
+Docker 内部不存在此问题（`entrypoint.py` 固定 LiteLLM 使用 `4000`，Node 代理为独立容器）。
+
+</details>
+
 ---
 
 ## 项目统计
@@ -596,6 +631,7 @@ agentrouter.org 首次请求可能有冷启动延迟（30 秒以上）。解决�
 |------|------|------|
 | v1.0.0 | 2025 | 初始版本：多模型代理、Node 上游转发、遥测中间件 |
 | v1.1.0 | 2026-02 | 多 API Key 负载均衡、动态 Key 路由、ClientPool、测试脚本 |
+| v1.2.0 | 2026-04 | Claude 模型支持、统一 OpenAI 兼容路由、Master Key 环境变量化、端口架构优化 |
 
 ---
 

@@ -23,7 +23,7 @@ class TestParseArgs:
             assert args.config is None
             assert args.alias == "gpt-5"
             assert args.model == "gpt-5"
-            assert args.upstream_base == "https://agentrouter.org/v1"
+            assert args.upstream_base is None
             assert args.master_key == "sk-local-master"
             assert args.host == "0.0.0.0"
             assert args.port == 4000
@@ -99,11 +99,12 @@ class TestParseArgs:
             assert args.model == "gpt-3.5-turbo"
 
     def test_parse_args_upstream_base_from_env(self):
-        """Test parse_args with upstream base from environment variable."""
+        """upstream_base default is now None; OPENAI_BASE_URL no longer drives --upstream-base."""
         with patch.dict(os.environ, {"OPENAI_BASE_URL": "https://env.api.com/v1"}):
             args = parse_args([])
 
-            assert args.upstream_base == "https://env.api.com/v1"
+            # --upstream-base default is None (env var is consumed later by prepare_config)
+            assert args.upstream_base is None
 
     def test_parse_args_master_key_from_env(self):
         """Test parse_args with master key from environment variable."""
