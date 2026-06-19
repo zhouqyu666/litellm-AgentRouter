@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import TelemetryConfig
 from .request_context import apply_reasoning_policy
+from .store import telemetry_store
 from .usage import parse_usage_from_response, parse_usage_from_stream_chunk, to_usage_tokens
 
 
@@ -102,7 +103,6 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
             "remote_addr": remote_addr,
             "reasoning_metadata": reasoning_metadata,
         }
-        self._publish_event(request_event)
 
         # Extract model alias early (after reasoning policy mutation)
         try:
@@ -113,6 +113,10 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
             request_body = None
             model_alias = "unknown"
             streaming = False
+
+        request_event["model_alias"] = model_alias
+        request_event["streaming"] = streaming
+        self._publish_event(request_event)
 
         upstream_model = self.config.alias_resolver(model_alias)
 
@@ -144,6 +148,9 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
                 "timestamp": timestamp,
                 "duration_s": duration_s,
                 "status_code": status_code,
+                "method": method,
+                "path": path,
+                "model_alias": model_alias,
                 "upstream_model": upstream_model,
                 "usage": usage,
                 "streaming": streaming,
@@ -152,6 +159,7 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
                 "client_request_id": client_request_id,
                 "remote_addr": remote_addr,
             }
+            telemetry_store.record(completion_event)
             self._publish_event(completion_event)
             return response
 
@@ -165,12 +173,17 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
                 "timestamp": timestamp,
                 "duration_s": duration_s,
                 "status_code": status_code,
+                "method": method,
+                "path": path,
+                "model_alias": model_alias,
+                "upstream_model": upstream_model,
                 "error_type": type(e).__name__,
                 "error_message": str(e),
                 "streaming": streaming,
                 "client_request_id": client_request_id,
                 "remote_addr": remote_addr,
             }
+            telemetry_store.record(error_event)
             self._publish_event(error_event)
             raise
 

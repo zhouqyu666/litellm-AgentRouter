@@ -40,6 +40,12 @@ def client(env_file):
     set_env_file(EnvFile(str(env_file)))
 
     client = TestClient(app)
+    login_response = client.post(
+        "/admin/api/login",
+        json={"username": "admin", "password": "changeme"},
+    )
+    token = login_response.json()["token"]
+    client.headers.update({"Authorization": f"Bearer {token}"})
     yield client
 
     set_env_file(None)
@@ -61,16 +67,49 @@ class TestHealthEndpoint:
 
 
 class TestAuthEndpoint:
-    def test_auth_status_disabled(self, client):
+    def test_auth_status_enabled_by_default(self, client):
         resp = client.get("/admin/api/auth/status")
         assert resp.status_code == 200
-        assert resp.json()["enabled"] is False
+        assert resp.json()["enabled"] is True
 
-    def test_login_no_auth(self, client):
-        resp = client.post("/admin/api/login", json={"username": "", "password": ""})
+    def test_login_default_credentials(self, client):
+        resp = client.post("/admin/api/login", json={"username": "admin", "password": "changeme"})
         assert resp.status_code == 200
         data = resp.json()
         assert "token" in data
+
+    def test_login_rejects_empty_credentials(self, client):
+        client.headers.pop("Authorization", None)
+        resp = client.post("/admin/api/login", json={"username": "", "password": ""})
+        assert resp.status_code == 401
+
+    def test_change_password_updates_env_file(self, client, env_file):
+        resp = client.put("/admin/api/auth/password", json={
+            "old_password": "changeme",
+            "new_password": "new-secret-123",
+        })
+
+        assert resp.status_code == 200
+        ef = EnvFile(str(env_file))
+        assert ef.get("ADMIN_PASSWORD") == "new-secret-123"
+
+    def test_change_password_rejects_wrong_old_password(self, client, env_file):
+        resp = client.put("/admin/api/auth/password", json={
+            "old_password": "wrong",
+            "new_password": "new-secret-123",
+        })
+
+        assert resp.status_code == 401
+        ef = EnvFile(str(env_file))
+        assert ef.get("ADMIN_PASSWORD") is None
+
+    def test_change_password_rejects_short_password(self, client):
+        resp = client.put("/admin/api/auth/password", json={
+            "old_password": "changeme",
+            "new_password": "short",
+        })
+
+        assert resp.status_code == 400
 
 
 class TestConfigEndpoint:
@@ -132,6 +171,7 @@ class TestModelCRUD:
             "upstream_model": "model",
         })
         assert resp.status_code == 400
+        assert "模型 Key" in resp.json()["detail"]
 
     @patch("src.admin.routes.delete_model_by_name")
     def test_delete_model(self, mock_delete, client, env_file):

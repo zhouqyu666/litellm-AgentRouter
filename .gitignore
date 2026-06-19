@@ -159,3 +159,5 @@ litellm-config-*.yaml
 /*.ps1 
 
 repomix*
+
+data/

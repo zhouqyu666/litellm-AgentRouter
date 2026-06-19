@@ -14,6 +14,9 @@ def start_proxy(args: argparse.Namespace, config_path: Path) -> None:
     import sys
     import os
 
+    os.environ["PORT"] = str(args.port)
+    os.environ.setdefault("ADMIN_PROXY_BASE_URL", f"http://127.0.0.1:{args.port}")
+
     # Fix Windows UTF-8 encoding for LiteLLM banner display
     if sys.platform == 'win32':
         import codecs

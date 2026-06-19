@@ -20,19 +20,19 @@ class TestIsAuthEnabled:
         from src.admin.auth import is_auth_enabled
         assert is_auth_enabled() is True
 
-    def test_disabled_when_no_username(self, monkeypatch):
+    def test_enabled_when_no_username_uses_defaults(self, monkeypatch):
         monkeypatch.setenv("ADMIN_PASSWORD", "pass")
         from src.admin.auth import is_auth_enabled
-        assert is_auth_enabled() is False
+        assert is_auth_enabled() is True
 
-    def test_disabled_when_no_password(self, monkeypatch):
+    def test_enabled_when_no_password_uses_defaults(self, monkeypatch):
         monkeypatch.setenv("ADMIN_USERNAME", "admin")
         from src.admin.auth import is_auth_enabled
-        assert is_auth_enabled() is False
+        assert is_auth_enabled() is True
 
-    def test_disabled_when_empty(self):
+    def test_enabled_when_empty_uses_defaults(self):
         from src.admin.auth import is_auth_enabled
-        assert is_auth_enabled() is False
+        assert is_auth_enabled() is True
 
 
 class TestVerifyCredentials:
@@ -54,9 +54,13 @@ class TestVerifyCredentials:
         from src.admin.auth import verify_credentials
         assert verify_credentials("admin", "wrong") is False
 
-    def test_no_auth_always_true(self):
+    def test_default_credentials_work_when_not_configured(self):
         from src.admin.auth import verify_credentials
-        assert verify_credentials("any", "any") is True
+        assert verify_credentials("admin", "changeme") is True
+
+    def test_random_credentials_fail_when_not_configured(self):
+        from src.admin.auth import verify_credentials
+        assert verify_credentials("any", "any") is False
 
 
 class TestTokenRoundTrip:

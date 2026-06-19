@@ -28,11 +28,17 @@ services:
     entrypoint: ["/bin/bash", "/app/entrypoint.sh"]
     volumes:
       - ./src:/app/src
+      - ./admin-ui:/app/admin-ui
       - ./.env:/app/.env
       - ./entrypoint.sh:/app/entrypoint.sh
     env_file:
       - .env
+    environment:
+      ADMIN_PROXY_BASE_URL: http://127.0.0.1:4000
     restart: unless-stopped
+    depends_on:
+      node-proxy:
+        condition: service_healthy
     networks:
       default:
         aliases:

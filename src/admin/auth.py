@@ -15,6 +15,9 @@ import time
 import base64
 from typing import Any, Dict, Optional
 
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = "changeme"
+
 
 def _get_jwt_secret() -> str:
     """Get JWT secret from env, defaulting to LITELLM_MASTER_KEY."""
@@ -27,17 +30,15 @@ def _get_jwt_secret() -> str:
 
 
 def is_auth_enabled() -> bool:
-    """Return True if both ADMIN_USERNAME and ADMIN_PASSWORD are set."""
-    username = os.getenv("ADMIN_USERNAME", "").strip()
-    password = os.getenv("ADMIN_PASSWORD", "").strip()
-    return bool(username and password)
+    """Admin authentication is always enabled."""
+    return True
 
 
 def get_admin_credentials() -> tuple:
-    """Return (username, password) from env."""
+    """Return (username, password) from env or defaults."""
     return (
-        os.getenv("ADMIN_USERNAME", "").strip(),
-        os.getenv("ADMIN_PASSWORD", "").strip(),
+        os.getenv("ADMIN_USERNAME", "").strip() or DEFAULT_ADMIN_USERNAME,
+        os.getenv("ADMIN_PASSWORD", "").strip() or DEFAULT_ADMIN_PASSWORD,
     )
 
 
@@ -48,8 +49,6 @@ def _hash_password(password: str) -> str:
 
 def verify_credentials(username: str, password: str) -> bool:
     """Verify username and password against env configuration."""
-    if not is_auth_enabled():
-        return True
     expected_user, expected_pass = get_admin_credentials()
     return (
         username == expected_user

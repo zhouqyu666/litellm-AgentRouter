@@ -67,6 +67,11 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PasswordChangeRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
 class ModelCreateRequest(BaseModel):
     key: str
     upstream_model: str
@@ -114,6 +119,25 @@ async def auth_status():
     return {"enabled": is_auth_enabled()}
 
 
+@admin_router.put("/auth/password")
+async def change_password(req: PasswordChangeRequest, _auth=Depends(require_auth)):
+    from .auth import get_admin_credentials
+
+    username, _password = get_admin_credentials()
+    if not verify_credentials(username, req.old_password):
+        raise HTTPException(status_code=401, detail="Old password is incorrect")
+
+    new_password = req.new_password.strip()
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+
+    env = _get_env_file()
+    env.set("ADMIN_PASSWORD", new_password)
+    os.environ["ADMIN_PASSWORD"] = new_password
+
+    return {"message": "Password updated"}
+
+
 # --- Config Read Endpoints ---
 
 
@@ -152,6 +176,24 @@ async def get_keys(provider: str, _auth=Depends(require_auth)):
     return {"provider": provider, "keys": keys}
 
 
+# --- Telemetry Endpoints ---
+
+
+@admin_router.get("/telemetry/requests")
+async def get_telemetry_requests(limit: int = 100, _auth=Depends(require_auth)):
+    from src.middleware.telemetry.store import telemetry_store
+
+    safe_limit = max(1, min(limit, 1000))
+    return {"requests": telemetry_store.list_requests(limit=safe_limit)}
+
+
+@admin_router.get("/telemetry/summary")
+async def get_telemetry_summary(_auth=Depends(require_auth)):
+    from src.middleware.telemetry.store import telemetry_store
+
+    return {"summary": telemetry_store.summary()}
+
+
 # --- Model CRUD Endpoints ---
 
 
@@ -159,7 +201,13 @@ async def get_keys(provider: str, _auth=Depends(require_auth)):
 async def create_model(req: ModelCreateRequest, _auth=Depends(require_auth)):
     key = req.key.upper().strip()
     if not re.match(r"^[A-Z0-9_]+$", key):
-        raise HTTPException(status_code=400, detail="Model key must be alphanumeric/underscore")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "模型 Key 只能使用英文字母、数字、下划线，例如 GPT5_4；"
+                "API Key 请在 API Key 管理里添加。"
+            ),
+        )
 
     if not req.upstream_model.strip():
         raise HTTPException(status_code=400, detail="upstream_model is required")
@@ -486,7 +534,12 @@ def _get_provider_key(provider: str) -> str:
     if keys:
         return keys[0]
 
-    return data.get(f"{provider.upper()}_API_KEY", "")
+    single_key = data.get(f"{provider.upper()}_API_KEY", "")
+    if "," in single_key:
+        split_keys = parse_api_keys(single_key)
+        return split_keys[0] if split_keys else ""
+
+    return single_key
 
 
 def _do_full_hot_reload() -> Dict[str, Any]:
@@ -504,7 +557,9 @@ def _do_full_hot_reload() -> Dict[str, Any]:
         keys = parse_api_keys(keys_str)
         if not keys:
             single = data.get(f"{provider.upper()}_API_KEY", "")
-            if single:
+            if "," in single:
+                keys = parse_api_keys(single)
+            elif single:
                 keys = [single]
         if keys:
             provider_keys[provider] = keys

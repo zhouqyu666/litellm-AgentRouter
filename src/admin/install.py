@@ -11,6 +11,7 @@ from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from .routes import admin_router
 
@@ -38,7 +39,19 @@ def install_admin(app: FastAPI) -> None:
     # Mount API routes
     app.include_router(admin_router)
 
-    # Serve admin HTML page
+    static_dir = Path(__file__).parent / "static"
+    static_index = static_dir / "index.html"
+    if static_index.is_file():
+        app.mount("/admin/assets", StaticFiles(directory=str(static_dir / "assets")), name="admin-assets")
+
+        @app.get("/admin", include_in_schema=False)
+        @app.get("/admin/", include_in_schema=False)
+        async def serve_admin_page():
+            return HTMLResponse(content=static_index.read_text(encoding="utf-8"))
+
+        logger.info("React admin management panel installed at /admin/")
+        return
+
     html_content = _load_admin_html()
 
     @app.get("/admin", include_in_schema=False)

@@ -1,6 +1,6 @@
 services:
   node-proxy:
-    image: hailaobao2026/litellm-agentrouter:latest
+    image: wwwzhouhui569/litellm-agentrouter:latest
     container_name: litellm-node-proxy
     env_file:
       - .env
@@ -18,13 +18,15 @@ services:
     command: ["node", "/app/node/main.mjs"]
 
   litellm-proxy:
-    image: hailaobao2026/litellm-agentrouter:latest
+    image: wwwzhouhui569/litellm-agentrouter:latest
     container_name: litellm-python-proxy
     ports:
       - "${PORT:-4000}:4000"
     entrypoint: ["/bin/bash", "/app/entrypoint.sh"]
     env_file:
       - .env
+    environment:
+      ADMIN_PROXY_BASE_URL: http://127.0.0.1:4000
     restart: unless-stopped
     depends_on:
       node-proxy:

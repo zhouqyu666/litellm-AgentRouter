@@ -18,7 +18,12 @@ logger = logging.getLogger(__name__)
 
 def _get_proxy_base_url() -> str:
     """Get the LiteLLM proxy base URL for management API calls."""
-    return os.getenv("ADMIN_PROXY_BASE_URL", "http://127.0.0.1:4000")
+    explicit_base_url = os.getenv("ADMIN_PROXY_BASE_URL")
+    if explicit_base_url:
+        return explicit_base_url.rstrip("/")
+
+    proxy_port = os.getenv("PORT", "4000")
+    return f"http://127.0.0.1:{proxy_port}"
 
 
 def _get_master_key() -> str:

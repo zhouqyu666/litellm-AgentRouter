@@ -24,6 +24,11 @@ COPY src /app/src
 COPY node /app/node
 COPY entrypoint.sh /app/entrypoint.sh
 
+# Build React admin UI into src/admin/static
+COPY admin-ui/package.json admin-ui/tsconfig.json admin-ui/vite.config.ts admin-ui/index.html /app/admin-ui/
+COPY admin-ui/src /app/admin-ui/src
+RUN cd /app/admin-ui && npm install && npm run build
+
 RUN pip install --no-cache-dir -e .
 
 EXPOSE 4000
