@@ -28,7 +28,8 @@ LiteLLM AgentRouter 是一个双层代理系统，为 agentrouter.org 等上游 
 - OpenAI 兼容接口：任何支持 OpenAI API 的客户端均可直接接入（包括 Claude 模型）
 - 统一路由架构：所有模型（包括 Claude）通过 OpenAI 兼容路径转发，简化部署
 - 推理强度控制：按模型配置 `none` / `low` / `medium` / `high`
-- 请求遥测：结构化 JSON 日志，可插拔 Sink 架构
+- Web 管理端：支持登录、模型配置、API Key 管理、请求日志、消耗统计和管理员改密
+- 请求遥测：结构化 JSON 日志 + SQLite 持久化存储，服务重启后日志不丢失
 - 容器化部署：单镜像双服务，Docker Compose 一键启动
 
 ### 技术栈
@@ -53,7 +54,8 @@ LiteLLM AgentRouter 是一个双层代理系统，为 agentrouter.org 等上游 
 | 动态 API Key 路由 | 从请求头提取 Bearer Token，按 Key 缓存 SDK 客户端 | 已完成 |
 | 推理强度控制 | 按模型配置推理强度，不支持的模型自动过滤参数 | 已完成 |
 | 流式响应 | 支持 SSE 流式输出，可按请求/全局开关 | 已完成 |
-| 请求遥测 | 结构化 JSON 日志，Console / Logger / InMemory Sink | 已完成 |
+| Web 管理端 | React + TypeScript + Vite 管理界面，支持模型/API Key 管理、日志查看和管理员改密 | 已完成 |
+| 请求遥测 | 结构化 JSON 日志 + SQLite 持久化，请求模型、Token、耗时、状态可查询 | 已完成 |
 | Docker 一键部署 | 单镜像双服务，Docker Compose 编排，健康检查 | 已完成 |
 
 ---
@@ -77,33 +79,72 @@ cd litellm-AgentRouter
 cp .env.example .env
 # 编辑 .env，填入你的 API Key 和模型配置
 
-# 3. 启动服务（自动从 Docker Hub 拉取镜像）
-docker-compose up -d
+# 3. 拉取并启动服务（自动使用 Docker Hub 镜像）
+docker compose pull
+docker compose up -d
 
 # 4. 查看日志确认启动成功
-docker-compose logs -f
+docker compose logs -f
 ```
 
-`litellm-proxy` 配置了 `depends_on` 等待 `node-proxy` 健康检查通过后才启动，无需手动控制启动顺序。
+Docker Compose 默认使用镜像 `wwwzhouhui569/litellm-agentrouter:latest`，宿主机端口由 `.env` 中的 `PORT` 控制，默认访问地址为：
+
+- 管理端：`http://127.0.0.1:4000/admin/`
+- OpenAI 兼容接口：`http://127.0.0.1:4000/v1`
+
+`litellm-proxy` 配置了 `depends_on` 等待 `node-proxy` 健康检查通过后才启动，无需手动控制启动顺序。请求日志默认写入容器内 `data/telemetry.sqlite3`，如需长期保留建议在 Compose 中挂载 `./data:/app/data`。
 
 ### 源码部署
 
-```bash
-# 1. 安装 Python 依赖
+Windows PowerShell：
+
+```powershell
+# 1. 创建并激活 Python 虚拟环境
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 2. 安装 Python 依赖
 pip install -e ".[test]"
 
-# 2. 安装 Node 依赖并启动 Node 代理（必须先启动）
+# 3. 安装 Node 上游代理依赖
 cd node && npm install && cd ..
-node node/main.mjs  # 监听端口 4000
 
-# 3. 另开终端，启动 Python LiteLLM 代理
-python3 -m src.main --port 8000  # 连接 Node 代理 localhost:4000
+# 4. 构建管理端页面，构建产物会输出到 src/admin/static
+cd admin-ui
+npm install
+npm run build
+cd ..
 
-# 4. 运行测试
-pytest
+# 5. 启动 Python LiteLLM 代理，程序会自动拉起 Node 上游代理
+python -m src.main --host 0.0.0.0 --port 8000
 ```
 
-> **注意**: 源码部署时，Node 代理（端口 4000）和 Python 代理（端口 8000）必须同时运行。Node 代理必须先启动。
+Linux / macOS：
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[test]"
+
+cd node && npm install && cd ..
+cd admin-ui && npm install && npm run build && cd ..
+
+python -m src.main --host 0.0.0.0 --port 8000
+```
+
+源码方式默认访问地址：
+
+- 管理端：`http://127.0.0.1:8000/admin/`
+- OpenAI 兼容接口：`http://127.0.0.1:8000/v1`
+
+开发管理端页面时，可以另开一个终端运行：
+
+```powershell
+cd admin-ui
+npm run dev
+```
+
+然后访问 `http://127.0.0.1:5173/admin/`。后端仍然使用 `python -m src.main --host 0.0.0.0 --port 8000` 启动。
 
 ---
 
@@ -117,7 +158,7 @@ pytest
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="sk-zhouhuozhou",         # Master Key（见 .env 中的 LITELLM_MASTER_KEY）
+    api_key="sk-xxxxxx",         # Master Key（见 .env 中的 LITELLM_MASTER_KEY）
     base_url="http://localhost:8000"   # 代理地址
 )
 
@@ -136,10 +177,30 @@ print(response.choices[0].message.content)
 
 ```bash
 PORT=8000                          # 代理端口（默认: 8000，Docker 内部固定 4000）
-LITELLM_MASTER_KEY=sk-zhouhuozhou  # 客户端认证 Master Key（从环境变量读取）
+LITELLM_MASTER_KEY=sk-xxxxxx  # 客户端认证 Master Key（从环境变量读取）
 STREAMING_ENABLE=true              # 启用流式响应（默认: true）
 TELEMETRY_ENABLE=1                 # 启用遥测日志（默认: 1）
+TELEMETRY_DB_PATH=data/telemetry.sqlite3  # 请求日志 SQLite 数据库路径
 ```
+
+#### 管理端配置
+
+管理端默认需要登录后才能访问，默认账号密码为 `admin` / `changeme`。首次部署后请立即在管理端的“账号安全”页面修改密码，或直接在 `.env` 中设置更安全的账号密码。
+
+```bash
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=changeme
+ADMIN_JWT_SECRET=change-me-to-a-long-random-secret
+ADMIN_PROXY_BASE_URL=http://127.0.0.1:8000
+```
+
+说明：
+
+- `ADMIN_USERNAME`：管理端登录用户名。
+- `ADMIN_PASSWORD`：管理端登录密码，修改密码功能会写回 `.env`。
+- `ADMIN_JWT_SECRET`：登录 Token 签名密钥，生产环境建议设置为随机长字符串。
+- `ADMIN_PROXY_BASE_URL`：管理端后端 API 基础地址。源码部署通常是 `http://127.0.0.1:8000`，Docker Compose 内部固定为 `http://127.0.0.1:4000`。
+- `TELEMETRY_DB_PATH`：请求日志数据库路径，默认 `data/telemetry.sqlite3`。
 
 #### 上游 API 配置
 
@@ -157,6 +218,9 @@ REASONING_EFFORT=medium                      # 默认推理强度（none/low/med
 ```bash
 # 方式一（推荐）：使用 OPENAI_API_KEYS（逗号分隔）
 OPENAI_API_KEYS=sk-key1,sk-key2,sk-key3
+
+# Anthropic 原生接口使用 ANTHROPIC_API_KEYS（逗号分隔）
+ANTHROPIC_API_KEYS=sk-ant-key1,sk-ant-key2,sk-ant-key3
 
 # 方式二：在 OPENAI_API_KEY 中用逗号分隔（自动识别）
 OPENAI_API_KEY=sk-key1,sk-key2,sk-key3
@@ -279,6 +343,7 @@ litellm-AgentRouter/
 │   ├── cli.py                         # CLI 参数解析
 │   ├── proxy.py                       # 代理启动 & LiteLLM 集成
 │   ├── utils.py                       # 工具函数
+│   ├── admin/                         # 管理端 API、认证、静态页面服务
 │   ├── config/                        # 配置子系统
 │   │   ├── config.py                  # RuntimeConfig 集中配置对象
 │   │   ├── models.py                  # ModelSpec 模型能力定义
@@ -288,9 +353,12 @@ litellm-AgentRouter/
 │   ├── middleware/                     # 中间件子系统
 │   │   ├── registry.py                # 中间件注册
 │   │   ├── reasoning_filter/          # 推理参数过滤中间件
-│   │   └── telemetry/                 # 遥测中间件 & Sink 架构
+│   │   └── telemetry/                 # 遥测中间件、Sink 架构、SQLite 存储
 │   └── node/
 │       └── process.py                 # Node.js 子进程管理
+│
+├── admin-ui/                          # React + TypeScript + Vite 管理端源码
+│   └── src/                           # 页面、状态、API 客户端和样式
 │
 ├── node/                              # Node.js 上游代理
 │   ├── main.mjs                       # 入口：服务启动 & 信号处理
@@ -390,31 +458,66 @@ litellm-AgentRouter/
 预构建镜像已发布到 Docker Hub：
 
 ```
-hailaobao2026/litellm-agentrouter:latest
+wwwzhouhui569/litellm-agentrouter:latest
 ```
 
 该镜像同时包含 Python 和 Node.js 运行时，`docker-compose.yml` 通过不同的启动命令区分两个服务：
 - **node-proxy**: `node /app/node/main.mjs`（Node 上游代理）
 - **litellm-proxy**: `/app/entrypoint.sh`（LiteLLM Python 代理）
 
+Docker Hub 地址：[https://hub.docker.com/r/wwwzhouhui569/litellm-agentrouter](https://hub.docker.com/r/wwwzhouhui569/litellm-agentrouter)
+
+如需手动拉取：
+
+```bash
+docker pull wwwzhouhui569/litellm-agentrouter:latest
+```
+
+最小 Compose 示例：
+
+```yaml
+services:
+  node-proxy:
+    image: wwwzhouhui569/litellm-agentrouter:latest
+    env_file:
+      - .env
+    restart: unless-stopped
+    command: ["node", "/app/node/main.mjs"]
+
+  litellm-proxy:
+    image: wwwzhouhui569/litellm-agentrouter:latest
+    ports:
+      - "${PORT:-4000}:4000"
+    entrypoint: ["/bin/bash", "/app/entrypoint.sh"]
+    env_file:
+      - .env
+    environment:
+      ADMIN_PROXY_BASE_URL: http://127.0.0.1:4000
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    depends_on:
+      - node-proxy
+```
+
 ### Docker Compose 常用命令
 
 ```bash
 # 启动服务（从 Docker Hub 拉取预构建镜像）
-docker-compose up -d
+docker compose up -d
 
 # 停止服务
-docker-compose down
+docker compose down
 
 # 查看所有日志
-docker-compose logs -f
+docker compose logs -f
 
 # 查看单个服务日志
-docker-compose logs -f node-proxy
-docker-compose logs -f litellm-proxy
+docker compose logs -f node-proxy
+docker compose logs -f litellm-proxy
 
 # 更新到最新镜像
-docker-compose pull && docker-compose up -d
+docker compose pull && docker compose up -d
 ```
 
 ### 构建 Docker 镜像
@@ -423,10 +526,10 @@ docker-compose pull && docker-compose up -d
 
 ```bash
 # 构建镜像
-docker build -t hailaobao2026/litellm-agentrouter .
+docker build -t wwwzhouhui569/litellm-agentrouter:latest .
 
 # 推送到 Docker Hub（需先 docker login）
-docker push hailaobao2026/litellm-agentrouter
+docker push wwwzhouhui569/litellm-agentrouter:latest
 ```
 
 镜像基于 `python:3.12-slim`，额外安装了 Node.js 运行时，同时包含 Python 和 Node.js 两套代码。两个服务共用同一个镜像，通过 `docker-compose.yml` 中不同的 `command` / `entrypoint` 启动不同的服务进程。
@@ -445,7 +548,7 @@ docker run -d \
   --network litellm-network \
   --env-file .env \
   --restart unless-stopped \
-  hailaobao2026/litellm-agentrouter:latest \
+  wwwzhouhui569/litellm-agentrouter:latest \
   node /app/node/main.mjs
 
 # 启动 LiteLLM Python 代理
@@ -456,7 +559,7 @@ docker run -d \
   -p 4000:4000 \
   --entrypoint /bin/bash \
   --restart unless-stopped \
-  hailaobao2026/litellm-agentrouter:latest \
+  wwwzhouhui569/litellm-agentrouter:latest \
   /app/entrypoint.sh
 ```
 
@@ -639,8 +742,8 @@ Docker 内部不存在此问题（`entrypoint.py` 固定 LiteLLM 使用 `4000`�
 
 ### 计划功能
 
-- [ ] Web 管理面板：可视化查看请求日志和 Key 用量
-- [ ] Key 用量统计：按 Key 统计请求数、Token 消耗
+- [x] Web 管理面板：可视化管理模型、API Key、请求日志和管理员密码
+- [x] 请求日志持久化：使用 SQLite 记录请求模型、状态、耗时和 Token 消耗
 - [ ] 权重路由：支持按 Key 配置不同的分发权重
 - [ ] 自动 Key 禁用：连续失败超过阈值自动移除 Key
 
