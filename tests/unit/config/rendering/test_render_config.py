@@ -144,15 +144,18 @@ class TestRenderConfig:
                 assert "ignoring reasoning_effort=high" in warning_call
 
     def test_render_config_empty_model_specs(self):
-        """render_config should raise ValueError for empty model specs."""
-        with pytest.raises(ValueError, match="No model specifications provided"):
-            render_config(
-                model_specs=[],
-                global_upstream_base="https://api.openai.com/v1",
-                master_key="sk-test",
-                drop_params=False,
-                streaming=True
-            )
+        """Empty model specs should render an empty list for first-time setup."""
+        config_text = render_config(
+            model_specs=[],
+            global_upstream_base="https://api.openai.com/v1",
+            master_key="sk-test",
+            drop_params=False,
+            streaming=True
+        )
+
+        parsed = yaml.safe_load(config_text)
+        assert parsed["model_list"] == []
+        assert parsed["general_settings"]["master_key"] == "sk-test"
 
     def test_render_config_none_model_specs(self):
         """render_config should raise ValueError for None model specs."""

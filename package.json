@@ -1,7 +1,9 @@
 {
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
-    "openai": "^6.8.1"
+    "node-fetch": "^3.3.2",
+    "openai": "^6.8.1",
+    "proxy-agent": "^8.0.2"
   },
   "scripts": {
     "test": "node --test node/tests/unit/*.test.mjs node/tests/integration/*.test.mjs",

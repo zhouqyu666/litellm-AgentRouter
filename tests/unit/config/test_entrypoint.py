@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Unit tests for Docker entrypoint module.
 """
@@ -20,11 +20,25 @@ from src.config.entrypoint import (
 )
 
 
+@pytest.fixture(autouse=True)
+def clean_api_key_env(monkeypatch):
+    """Avoid API key variables leaking between entrypoint tests."""
+    for key in (
+        "OPENAI_API_KEYS",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEYS",
+        "ANTHROPIC_API_KEY",
+        "CONFIG_BACKEND",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+
 class TestValidateEnvironment:
     """Tests for validate_environment function."""
 
     def test_validate_environment_success(self, monkeypatch):
         """Test that validation passes when at least one model is defined."""
+        monkeypatch.setenv("CONFIG_BACKEND", "env")
         for key in list(os.environ.keys()):
             if key.startswith("MODEL_"):
                 monkeypatch.delenv(key, raising=False)
@@ -36,6 +50,7 @@ class TestValidateEnvironment:
         """Test that validation fails when no MODEL_* vars are defined."""
         # Skip .env file loading to prevent MODEL_* vars from being reloaded
         monkeypatch.setenv("SKIP_DOTENV", "1")
+        monkeypatch.setenv("CONFIG_BACKEND", "env")
 
         for key in list(os.environ.keys()):
             if key.startswith("MODEL_"):
@@ -47,6 +62,15 @@ class TestValidateEnvironment:
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "MODEL_<KEY>_UPSTREAM_MODEL" in captured.err
+
+    def test_validate_environment_db_backend_allows_empty_models(self, monkeypatch):
+        """DB backend can start empty so the Admin UI can create models."""
+        monkeypatch.setenv("CONFIG_BACKEND", "db")
+        for key in list(os.environ.keys()):
+            if key.startswith("MODEL_"):
+                monkeypatch.delenv(key, raising=False)
+
+        validate_environment()
 
 
 class TestMaskSensitiveValue:
@@ -148,7 +172,7 @@ class TestMain:
     @patch("src.config.entrypoint.os.execvp")
     @patch("src.config.entrypoint.write_config_file")
     @patch("src.config.entrypoint.render_config")
-    @patch("src.config.entrypoint.load_model_specs_from_env")
+    @patch("src.config.entrypoint.load_model_specs")
     @patch("src.config.entrypoint.validate_environment")
     @patch("src.config.entrypoint.NodeProxyProcess")
     def test_main_integration_flow(
@@ -165,6 +189,7 @@ class TestMain:
         """Test the full main() integration flow with mocked dependencies."""
         # Setup environment
         monkeypatch.setenv("OPENAI_BASE_URL", "https://agentrouter.org/v1")
+        monkeypatch.setenv("CONFIG_BACKEND", "env")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-api-key-1234567890")
         monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-local-master")
         monkeypatch.setenv("LITELLM_HOST", "0.0.0.0")
@@ -193,7 +218,10 @@ class TestMain:
             master_key="sk-local-master",
             drop_params=True,
             streaming=True,
-            provider_api_keys={"openai": ["sk-test-api-key-1234567890"]},
+            provider_api_keys={
+                "openai": ["sk-test-api-key-1234567890"],
+                "anthropic": ["sk-test-api-key-1234567890"],
+            },
             node_proxy_base="http://127.0.0.1:4000",
         )
         mock_write.assert_called_once_with(
@@ -225,7 +253,7 @@ class TestMain:
         assert "master-key-secret" not in captured.out
         monkeypatch.delenv("NODE_UPSTREAM_PROXY_PID", raising=False)
 
-    @patch("src.config.entrypoint.load_model_specs_from_env")
+    @patch("src.config.entrypoint.load_model_specs")
     @patch("src.config.entrypoint.validate_environment")
     @patch("src.config.entrypoint.NodeProxyProcess")
     def test_main_exits_on_load_specs_error(
@@ -236,11 +264,12 @@ class TestMain:
         monkeypatch,
         capsys,
     ):
-        """Test that main exits with error when load_model_specs_from_env fails."""
+        """Test that main exits with error when load_model_specs fails."""
         mock_node_instance = MagicMock()
         mock_node_instance.start.return_value.pid = 5678
         mock_node_cls.return_value = mock_node_instance
         mock_load_specs.side_effect = ValueError("Missing MODEL_GPT5_UPSTREAM_MODEL")
+        monkeypatch.setenv("CONFIG_BACKEND", "env")
 
         with pytest.raises(SystemExit) as exc_info:
             main()
@@ -252,7 +281,7 @@ class TestMain:
         monkeypatch.delenv("NODE_UPSTREAM_PROXY_PID", raising=False)
 
     @patch("src.config.entrypoint.render_config")
-    @patch("src.config.entrypoint.load_model_specs_from_env")
+    @patch("src.config.entrypoint.load_model_specs")
     @patch("src.config.entrypoint.validate_environment")
     @patch("src.config.entrypoint.NodeProxyProcess")
     def test_main_exits_on_render_error(
@@ -270,6 +299,7 @@ class TestMain:
         mock_node_cls.return_value = mock_node_instance
         mock_load_specs.return_value = [MagicMock()]
         mock_render.side_effect = Exception("Render failed")
+        monkeypatch.setenv("CONFIG_BACKEND", "env")
 
         with pytest.raises(SystemExit) as exc_info:
             main()
@@ -283,7 +313,7 @@ class TestMain:
     @patch("src.config.entrypoint.os.execvp")
     @patch("src.config.entrypoint.write_config_file")
     @patch("src.config.entrypoint.render_config")
-    @patch("src.config.entrypoint.load_model_specs_from_env")
+    @patch("src.config.entrypoint.load_model_specs")
     @patch("src.config.entrypoint.validate_environment")
     @patch("socket.gethostbyname")
     def test_main_docker_compose_mode(
@@ -299,6 +329,7 @@ class TestMain:
     ):
         """Test main() in docker-compose mode where node-proxy hostname resolves."""
         monkeypatch.setenv("NODE_UPSTREAM_PROXY_ENABLE", "1")
+        monkeypatch.setenv("CONFIG_BACKEND", "env")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-dc-test-1234567890")
         monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-local-master")
         monkeypatch.setenv("LITELLM_HOST", "0.0.0.0")
@@ -333,6 +364,8 @@ class TestMain:
         mock_node_instance = MagicMock()
         mock_node_instance.start.side_effect = RuntimeError("Node.js runtime not available")
         mock_node_cls.return_value = mock_node_instance
+        monkeypatch.setenv("CONFIG_BACKEND", "env")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-api-key")
 
         with pytest.raises(SystemExit) as exc_info:
             main()
@@ -343,7 +376,7 @@ class TestMain:
 
     @patch("src.config.entrypoint.write_config_file")
     @patch("src.config.entrypoint.render_config")
-    @patch("src.config.entrypoint.load_model_specs_from_env")
+    @patch("src.config.entrypoint.load_model_specs")
     @patch("src.config.entrypoint.validate_environment")
     @patch("src.config.entrypoint.NodeProxyProcess")
     def test_main_test_mode_stops_node_process(
@@ -358,6 +391,7 @@ class TestMain:
     ):
         """Test ENTRYPOINT_TEST_MODE stops node process and exits cleanly."""
         monkeypatch.setenv("ENTRYPOINT_TEST_MODE", "1")
+        monkeypatch.setenv("CONFIG_BACKEND", "env")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-test-tm-1234567890")
         monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-local-master")
         monkeypatch.setenv("LITELLM_HOST", "0.0.0.0")
@@ -380,7 +414,7 @@ class TestMain:
 
     @patch("src.config.entrypoint.write_config_file")
     @patch("src.config.entrypoint.render_config")
-    @patch("src.config.entrypoint.load_model_specs_from_env")
+    @patch("src.config.entrypoint.load_model_specs")
     @patch("src.config.entrypoint.validate_environment")
     @patch("src.config.entrypoint.NodeProxyProcess")
     def test_main_exits_on_write_error(
@@ -400,6 +434,7 @@ class TestMain:
         mock_load_specs.return_value = [MagicMock()]
         mock_render.return_value = "config: data"
         mock_write.side_effect = Exception("Write failed")
+        monkeypatch.setenv("CONFIG_BACKEND", "env")
 
         with pytest.raises(SystemExit) as exc_info:
             main()

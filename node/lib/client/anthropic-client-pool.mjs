@@ -1,13 +1,16 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { createProxyFetch, maskProxyUrl } from "../utils/proxy-fetch.mjs";
 
 /**
  * Pool of Anthropic clients keyed by API key.
  * Reuses existing client instances to avoid repeated SDK initialisation.
  */
 export class AnthropicClientPool {
-  constructor({ baseURL, timeoutMs, logger }) {
+  constructor({ baseURL, timeoutMs, upstreamProxyUrl, logger }) {
     this.baseURL = baseURL;
     this.timeoutMs = timeoutMs;
+    this.upstreamProxyUrl = upstreamProxyUrl;
+    this.fetch = createProxyFetch(upstreamProxyUrl);
     this.logger = logger || console;
     this._clients = new Map();
   }
@@ -37,7 +40,16 @@ export class AnthropicClientPool {
         authToken: apiKey,
         baseURL: this.baseURL,
         timeout: this.timeoutMs,
+        ...(this.fetch ? { fetch: this.fetch } : {}),
       });
+      if (this.fetch) {
+        this.logger.log(JSON.stringify({
+          anthropic_client: {
+            event: "using_upstream_proxy",
+            proxy_url: maskProxyUrl(this.upstreamProxyUrl),
+          },
+        }));
+      }
       this._clients.set(apiKey, client);
     }
     return client;
@@ -45,5 +57,11 @@ export class AnthropicClientPool {
 
   get size() {
     return this._clients.size;
+  }
+
+  setUpstreamProxyUrl(upstreamProxyUrl) {
+    this.upstreamProxyUrl = upstreamProxyUrl;
+    this.fetch = createProxyFetch(upstreamProxyUrl);
+    this._clients.clear();
   }
 }

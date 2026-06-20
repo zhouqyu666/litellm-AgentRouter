@@ -86,7 +86,7 @@ class TestMiddlewareBranches:
         assert len(self.in_memory.get_events()) > 0
 
     async def test_request_without_json_body(self):
-        """Handle requests that don't have JSON body."""
+        """Ignore non-model endpoints instead of logging noisy telemetry."""
         config = TelemetryConfig(
             toggle=EnabledToggle(),
             alias_resolver=lambda alias: f"openai/{alias}",
@@ -104,8 +104,7 @@ class TestMiddlewareBranches:
         result = await middleware.dispatch(request, call_next)
 
         assert result is response
-        events = self.in_memory.get_events()
-        assert any(e.get("event_type") == "ResponseCompleted" for e in events)
+        assert self.in_memory.get_events() == []
 
     async def test_request_with_x_forwarded_for_header(self):
         """Extract remote address from x-forwarded-for header."""
@@ -220,6 +219,7 @@ class TestMiddlewareBranches:
         events = self.in_memory.get_events()
         completion_event = next(e for e in events if e.get("event_type") == "ResponseCompleted")
         assert completion_event["streaming"] is True
+        assert completion_event["missing_usage"] is True
 
     async def test_response_without_body_attribute(self):
         """Handle response without body attribute."""

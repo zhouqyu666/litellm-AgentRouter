@@ -51,6 +51,13 @@ class NodeProxyProcess:
             raise FileNotFoundError(f"Node upstream proxy script not found: {script}")
         return script
 
+    def _first_csv_value(self, key: str) -> str | None:
+        value = os.environ.get(key, "")
+        if not value:
+            return None
+        first_value = value.split(",", 1)[0].strip()
+        return first_value or None
+
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
 
@@ -69,6 +76,8 @@ class NodeProxyProcess:
             env["OPENAI_API_KEY"] = first_key
         elif openai_key:
             env["OPENAI_API_KEY"] = openai_key
+        elif self._first_csv_value("OPENAI_API_KEYS"):
+            env["OPENAI_API_KEY"] = self._first_csv_value("OPENAI_API_KEYS") or ""
 
         # Handle Anthropic API keys
         anthropic_keys = _load_dotenv_value("ANTHROPIC_API_KEYS")
@@ -78,9 +87,12 @@ class NodeProxyProcess:
             env["ANTHROPIC_API_KEY"] = first_key
         elif anthropic_key:
             env["ANTHROPIC_API_KEY"] = anthropic_key
+        elif self._first_csv_value("ANTHROPIC_API_KEYS"):
+            env["ANTHROPIC_API_KEY"] = self._first_csv_value("ANTHROPIC_API_KEYS") or ""
         # Fallback to OpenAI key if no Anthropic key (unified proxy)
         elif not env.get("ANTHROPIC_API_KEY"):
             fallback = openai_keys.split(",")[0].strip() if openai_keys else openai_key
+            fallback = fallback or self._first_csv_value("OPENAI_API_KEYS")
             if fallback:
                 env["ANTHROPIC_API_KEY"] = fallback
 
@@ -96,9 +108,6 @@ class NodeProxyProcess:
         """Spawn the Node helper subprocess."""
         if self._process and self._process.poll() is None:
             return self._process
-
-        if "OPENAI_API_KEY" not in os.environ and not runtime_config.get_str("OPENAI_API_KEY"):
-            raise RuntimeError("OPENAI_API_KEY is required to start the Node upstream proxy")
 
         env = self._build_env()
         try:

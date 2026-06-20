@@ -31,4 +31,7 @@ RUN cd /app/admin-ui && npm install && npm run build
 
 RUN pip install --no-cache-dir -e .
 
+RUN mkdir -p /app/data
+VOLUME ["/app/data"]
+
 EXPOSE 4000

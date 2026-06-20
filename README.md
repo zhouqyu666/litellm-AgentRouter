@@ -26,7 +26,10 @@ LiteLLM AgentRouter 是一个双层代理系统，为 agentrouter.org 等上游 
 - 多模型路由：GPT-5、DeepSeek v3.2、Grok Code Fast-1、GLM-5.1、Claude Haiku 4.5、Claude Opus 4.6 等
 - 多 API Key 负载均衡：`simple-shuffle` 轮询策略 + 自动故障转移
 - OpenAI 兼容接口：任何支持 OpenAI API 的客户端均可直接接入（包括 Claude 模型）
-- 统一路由架构：所有模型（包括 Claude）通过 OpenAI 兼容路径转发，简化部署
+- 统一路由架构：所有模型（包括 Claude）通过 OpenAI 兼容路径转发，Claude 自动识别为 Anthropic Provider
+- SQLite 配置存储：模型、API Key、管理员密码持久化到 SQLite，支持管理端可视化配置
+- 双模式配置后端：`CONFIG_BACKEND=db`（默认）使用 SQLite 存储，`CONFIG_BACKEND=env` 兼容旧版环境变量模式
+- 自动迁移：首次启动自动将旧版 `.env` 中的模型和 Key 迁移到 SQLite
 - 推理强度控制：按模型配置 `none` / `low` / `medium` / `high`
 - Web 管理端：支持登录、模型配置、API Key 管理、请求日志、消耗统计和管理员改密
 - 请求遥测：结构化 JSON 日志 + SQLite 持久化存储，服务重启后日志不丢失
@@ -48,7 +51,11 @@ LiteLLM AgentRouter 是一个双层代理系统，为 agentrouter.org 等上游 
 
 | 功能名称 | 功能说明 | 状态 |
 |---------|---------|------|
-| 多模型路由 | 通过 `MODEL_<KEY>_*` 环境变量自动发现并注册多个模型 | 已完成 |
+| 多模型路由 | 通过 Admin UI 或 `MODEL_<KEY>_*` 环境变量自动发现并注册多个模型 | 已完成 |
+| SQLite 配置存储 | 模型、API Key、管理员密码持久化到 SQLite，支持管理端增删改 | 已完成 |
+| 配置自动迁移 | 首次启动自动将旧版 `.env` 中的模型和 Key 迁移到 SQLite | 已完成 |
+| 双模式配置后端 | `CONFIG_BACKEND=db`（默认）与 `CONFIG_BACKEND=env`（旧版）双模式支持 | 已完成 |
+| Claude Provider 识别 | `claude-` 前缀自动识别为 Anthropic Provider，通过 Node 代理原生转发 | 已完成 |
 | 多 Key 负载均衡 | 多个 API Key 轮询分发请求，单 Key 失败自动重试 | 已完成 |
 | Node.js 上游代理 | 使用官方 OpenAI SDK 转发请求，解决 User-Agent 兼容性 | 已完成 |
 | 动态 API Key 路由 | 从请求头提取 Bearer Token，按 Key 缓存 SDK 客户端 | 已完成 |
@@ -66,7 +73,7 @@ LiteLLM AgentRouter 是一个双层代理系统，为 agentrouter.org 等上游 
 
 - Docker 20+ 和 Docker Compose V2（容器部署）
 - 或 Python 3.8+ 和 Node.js 20+（源码部署）
-- 至少一个 agentrouter.org 的 API Key
+- 至少一个 agentrouter.org 的 API Key（推荐启动后在管理端添加）
 
 ### Docker Compose 部署（推荐）
 
@@ -77,7 +84,7 @@ cd litellm-AgentRouter
 
 # 2. 配置环境变量
 cp .env.example .env
-# 编辑 .env，填入你的 API Key 和模型配置
+# 编辑 .env，只保留端口、Master Key、上游默认地址等基础配置
 
 # 3. 拉取并启动服务（自动使用 Docker Hub 镜像）
 docker compose pull
@@ -92,7 +99,7 @@ Docker Compose 默认使用镜像 `wwwzhouhui569/litellm-agentrouter:latest`，�
 - 管理端：`http://127.0.0.1:4000/admin/`
 - OpenAI 兼容接口：`http://127.0.0.1:4000/v1`
 
-`litellm-proxy` 配置了 `depends_on` 等待 `node-proxy` 健康检查通过后才启动，无需手动控制启动顺序。请求日志默认写入容器内 `data/telemetry.sqlite3`，如需长期保留建议在 Compose 中挂载 `./data:/app/data`。
+`litellm-proxy` 配置了 `depends_on` 等待 `node-proxy` 健康检查通过后才启动，无需手动控制启动顺序。模型、API Key 和管理员密码写入 `data/config.sqlite3`，请求日志写入 `data/telemetry.sqlite3`，Compose 已挂载 `./data:/app/data` 用于持久化。
 
 ### 源码部署
 
@@ -169,23 +176,58 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+### Cherry Studio 获取不到模型列表
+
+Cherry Studio 的 API 地址填写 `http://127.0.0.1:4000` 时，客户端会请求 `http://127.0.0.1:4000/v1/models`。如果模型列表为空或获取失败，优先检查：
+
+1. API Key 必须填写代理的对外 `LITELLM_MASTER_KEY`，不是上游供应商 API Key。DB 模式下可在管理端“运行配置”页面查看和修改，修改后重启容器生效。
+2. 管理端“模型管理”里至少有一个模型，并且已经点击右上角“重载配置”。
+3. 如果接口返回 `data: []`，说明运行中的 LiteLLM 没有加载到模型；如果返回 401，说明 Cherry Studio 填写的 API Key 和当前生效的 Master Key 不一致。
+
+PowerShell 可用下面命令直接验证：
+
+```powershell
+Invoke-RestMethod -Headers @{Authorization="Bearer sk-你的对外MasterKey"} http://127.0.0.1:4000/v1/models
+```
+
 ### 配置说明
 
-所有配置通过 `.env` 文件中的环境变量完成，参见 `.env.example`。
+`.env` 只建议保存端口、数据库路径、功能开关等基础配置。模型管理、API Key 管理和管理员密码通过管理端写入 SQLite（`data/config.sqlite3`），参见 `.env.example`。
+
+#### 配置后端（CONFIG_BACKEND）
+
+项目支持两种配置存储方式，由 `CONFIG_BACKEND` 环境变量控制：
+
+- **`db`（默认）**：模型、API Key、管理员密码存储在 SQLite 中，通过 Admin UI 可视化管理。首次启动时自动将旧版 `.env` 中的 `MODEL_*` 和 `*_API_KEY*` 变量迁移到 SQLite。
+- **`env`（旧版）**：直接从环境变量 / `.env` 文件读取所有配置，兼容旧版部署方式。
+
+核心区别：
+
+| 特性 | db 模式（默认） | env 模式（旧版） |
+|------|----------------|-----------------|
+| 模型管理 | Admin UI → SQLite，支持热重载 | `.env` 手动编辑 |
+| API Key 管理 | Admin UI → SQLite，支持多 Key | `.env` `OPENAI_API_KEYS` / `ANTHROPIC_API_KEYS` |
+| 管理员密码 | Admin UI → SQLite | `.env` `ADMIN_USERNAME` / `ADMIN_PASSWORD` |
+| 首次启动 | 自动从 `.env` 迁移已有数据 | 直接读取 `.env` |
+| 配置同步 | 启动时 DB → os.environ，下游代码兼容 | 环境变量即数据源 |
 
 #### 核心配置
 
 ```bash
 PORT=8000                          # 代理端口（默认: 8000，Docker 内部固定 4000）
-LITELLM_MASTER_KEY=sk-xxxxxx  # 客户端认证 Master Key（从环境变量读取）
+LITELLM_MASTER_KEY=sk-xxxxxx  # 客户端认证 Master Key（DB 模式会在首次启动迁移到 SQLite）
 STREAMING_ENABLE=true              # 启用流式响应（默认: true）
 TELEMETRY_ENABLE=1                 # 启用遥测日志（默认: 1）
 TELEMETRY_DB_PATH=data/telemetry.sqlite3  # 请求日志 SQLite 数据库路径
+CONFIG_BACKEND=db                  # 模型/API Key/管理员配置默认使用 SQLite
+CONFIG_DB_PATH=data/config.sqlite3 # 模型/API Key/管理员配置 SQLite 数据库路径
 ```
 
 #### 管理端配置
 
-管理端默认需要登录后才能访问，默认账号密码为 `admin` / `changeme`。首次部署后请立即在管理端的“账号安全”页面修改密码，或直接在 `.env` 中设置更安全的账号密码。
+管理端默认需要登录后才能访问，默认账号密码为 `admin` / `changeme`。首次部署后请立即在管理端的“账号安全”页面修改密码；修改后的密码会保存到 SQLite。
+
+在 `CONFIG_BACKEND=db` 默认模式下，“运行配置”页面可以维护对外 `LITELLM_MASTER_KEY`。Cherry Studio、OpenAI SDK 等客户端填写的 API Key 必须等于这个值，而不是上游模型供应商的 API Key。由于 LiteLLM 的鉴权配置在启动时加载，页面保存新的对外 API Key 后需要重启容器才会生效。
 
 ```bash
 ADMIN_USERNAME=admin
@@ -197,23 +239,50 @@ ADMIN_PROXY_BASE_URL=http://127.0.0.1:8000
 说明：
 
 - `ADMIN_USERNAME`：管理端登录用户名。
-- `ADMIN_PASSWORD`：管理端登录密码，修改密码功能会写回 `.env`。
+- `ADMIN_PASSWORD`：首次启动可选密码；通过管理端修改后会写入 SQLite。
 - `ADMIN_JWT_SECRET`：登录 Token 签名密钥，生产环境建议设置为随机长字符串。
 - `ADMIN_PROXY_BASE_URL`：管理端后端 API 基础地址。源码部署通常是 `http://127.0.0.1:8000`，Docker Compose 内部固定为 `http://127.0.0.1:4000`。
+- `CONFIG_DB_PATH`：模型、API Key、管理员密码数据库路径，默认 `data/config.sqlite3`。
 - `TELEMETRY_DB_PATH`：请求日志数据库路径，默认 `data/telemetry.sqlite3`。
 
 #### 上游 API 配置
 
+DB 模式下，API Key 通过管理端添加和管理，无需在 `.env` 中配置。env 模式下仍可通过以下方式配置：
+
 ```bash
 OPENAI_BASE_URL=https://agentrouter.org/v1  # 上游 API 地址
-OPENAI_API_KEY=your-api-key                  # 单个 API Key
+OPENAI_API_KEY=your-api-key                  # 单个 API Key（仅 env 模式）
 MAX_TOKENS=8192                              # 最大 Token 数
 REASONING_EFFORT=medium                      # 默认推理强度（none/low/medium/high）
 ```
 
+#### 上游网络代理
+
+如果服务器出口 IP 被上游 WAF/风控拦截，可以在管理端“运行配置”页面配置上游网络代理。该配置保存到 `data/config.sqlite3` 的 `settings` 表，运行时会同步给 Node 上游代理，后续访问 `agentrouter.org` 等上游 API 会走该代理；留空则使用服务器原生网络。
+
+支持协议：
+
+```bash
+http://user:pass@host:port
+https://user:pass@host:port
+socks5://user:pass@host:port
+```
+
+也可以在首次部署时通过 `.env` 提供初始值：
+
+```bash
+UPSTREAM_PROXY_URL=socks5://user:pass@host:port
+```
+
+管理端会对代理账号密码做掩码展示。保存后会立即尝试同步到正在运行的 Node 上游代理；如果容器刚启动或同步失败，重启容器后也会从 SQLite 恢复该配置。
+
 #### 多 API Key 负载均衡
 
 支持多个 API Key 轮询负载均衡。配置后，每个模型会为每个 Key 生成一个独立的 LiteLLM 路由条目，使用 `simple-shuffle` 策略轮询分发请求。
+
+**DB 模式（推荐）**: 在管理端 "API Key 管理" 页面新增/删除 Key，数据写入 `data/config.sqlite3` 并立即返回，后台触发 LiteLLM 热重载。
+
+**env 模式（旧版）**: 通过环境变量配置：
 
 ```bash
 # 方式一（推荐）：使用 OPENAI_API_KEYS（逗号分隔）
@@ -233,10 +302,13 @@ OPENAI_API_KEY=sk-key1,sk-key2,sk-key3
 - 使用 `simple-shuffle` 路由策略在多个 Key 间轮询
 - Node 代理通过 `ClientPool` 为每个 Key 缓存独立的 OpenAI SDK 客户端
 - 某个 Key 请求失败时（如 401），LiteLLM 自动使用下一个 Key 重试
+- Claude 模型（Anthropic Provider）通过 `AnthropicClientPool` 独立管理 Anthropic SDK 客户端
 
 #### 多模型配置
 
-通过 `MODEL_<KEY>_*` 环境变量声明模型，自动发现并加载（按字母顺序排序）：
+**DB 模式（推荐）**: 在管理端“模型管理”页面新增/编辑模型，数据写入 SQLite 后自动触发 LiteLLM 热重载。
+
+**env 模式（旧版）**: 通过 `MODEL_<KEY>_*` 环境变量声明模型，自动发现并加载（按字母顺序排序）：
 
 ```bash
 # GPT-5 配置
@@ -261,11 +333,11 @@ MODEL_CLAUDE_HAIKU_UPSTREAM_MODEL=claude-haiku-4-5-20251001
 MODEL_CLAUDE_OPUS_UPSTREAM_MODEL=claude-opus-4-6
 ```
 
-> **注意**: 所有模型（包括 Claude）统一通过 OpenAI 兼容路径转发，无需单独配置 Anthropic provider。
+> **注意**: 所有模型（包括 Claude）统一通过 OpenAI 兼容路径（`/v1/chat/completions`）转发。`claude-` 前缀模型自动识别为 Anthropic Provider，通过 Node 代理的原生 Anthropic SDK 路由，无需手动配置 provider。
 
 #### 单模型配置
 
-至少设置一个 `MODEL_<KEY>_UPSTREAM_MODEL` 变量即可：
+至少设置一个 `MODEL_<KEY>_UPSTREAM_MODEL` 变量即可（env 模式下）：
 
 ```bash
 MODEL_PRIMARY_UPSTREAM_MODEL=gpt-5
@@ -493,6 +565,7 @@ services:
       - .env
     environment:
       ADMIN_PROXY_BASE_URL: http://127.0.0.1:4000
+      ADMIN_NODE_PROXY_BASE_URL: http://node-proxy:4000
     volumes:
       - ./data:/app/data
     restart: unless-stopped

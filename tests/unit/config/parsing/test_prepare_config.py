@@ -13,7 +13,8 @@ import pytest
 import yaml
 
 from src.config.models import ModelSpec
-from src.config.parsing import prepare_config
+from src.admin.config_store import ConfigStore, get_config_store, set_config_store
+from src.config.parsing import auto_migrate_from_env_if_db_empty, prepare_config
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +24,11 @@ def clear_model_env(monkeypatch):
         if key.startswith("MODEL_"):
             monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("PROXY_MODEL_KEYS", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEYS", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEYS", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CONFIG_BACKEND", "env")
 
 
 def make_spec(
@@ -185,6 +191,80 @@ class TestPrepareConfig:
 
         with pytest.raises(SystemExit):
             prepare_config(args)
+
+    def test_prepare_config_db_backend_allows_empty_models(self, monkeypatch):
+        """DB backend can render an empty config so Admin UI can add models."""
+        monkeypatch.setenv("CONFIG_BACKEND", "db")
+
+        args = SimpleNamespace(
+            config=None,
+            model_specs=[],
+            upstream_base=None,
+            master_key="sk-test",
+            no_master_key=False,
+            drop_params=True,
+            streaming=True,
+            node_upstream_proxy_enabled=False,
+            print_config=False,
+        )
+
+        with patch("src.config.parsing.load_model_specs_from_db", return_value=[]):
+            config_text, is_generated = prepare_config(args)
+
+        parsed = yaml.safe_load(config_text)
+        assert is_generated is True
+        assert parsed["model_list"] == []
+        assert parsed["general_settings"]["master_key"] == "sk-test"
+
+    def test_prepare_config_db_backend_prefers_master_key_from_sqlite(self, monkeypatch):
+        """DB-backed runtime should prefer LITELLM_MASTER_KEY stored in settings."""
+        monkeypatch.setenv("CONFIG_BACKEND", "db")
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-env-master")
+
+        args = SimpleNamespace(
+            config=None,
+            model_specs=[],
+            upstream_base=None,
+            master_key=None,
+            no_master_key=False,
+            drop_params=True,
+            streaming=True,
+            node_upstream_proxy_enabled=False,
+            print_config=False,
+        )
+
+        mock_store = type("Store", (), {
+            "get_setting": lambda self, key: "sk-db-master" if key == "LITELLM_MASTER_KEY" else None,
+            "get_all_provider_keys": lambda self: {},
+        })()
+
+        with patch("src.config.parsing.load_model_specs_from_db", return_value=[]), \
+                patch("src.config.parsing._get_config_store", return_value=mock_store):
+            config_text, is_generated = prepare_config(args)
+
+        parsed = yaml.safe_load(config_text)
+        assert is_generated is True
+        assert parsed["general_settings"]["master_key"] == "sk-db-master"
+
+    def test_auto_migrate_backfills_master_key_when_models_exist(self, monkeypatch):
+        """Existing DB data should still receive missing admin-managed settings."""
+        old_store = get_config_store()
+        store = ConfigStore(":memory:")
+        store.save_model(key="GPT5", upstream_model="gpt-5", provider="openai")
+        set_config_store(store)
+        monkeypatch.setenv("CONFIG_BACKEND", "db")
+        monkeypatch.setenv("SKIP_DOTENV", "1")
+        monkeypatch.delenv("ADMIN_USERNAME", raising=False)
+        monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-env-master")
+
+        try:
+            summary = auto_migrate_from_env_if_db_empty()
+        finally:
+            set_config_store(old_store)
+
+        assert summary == {"models": 0, "keys": 0, "settings": 1}
+        assert store.get_setting("LITELLM_MASTER_KEY") == "sk-env-master"
 
     def test_prepare_config_returns_path_for_existing_config(self, tmp_path):
         """Existing config file should be returned as a path with is_generated False."""

@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 """
 Admin API routes for AgentRouter management panel.
+
+Data is persisted to SQLite via ConfigStore for models, API keys, and
+admin credentials.  Basic infrastructure settings (PORT, base URLs,
+feature toggles) remain in .env for container-level configuration.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import socket
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from .auth import is_auth_enabled, verify_credentials, verify_token
+from .config_store import get_config_store
 from .env_manager import EnvFile
 from .hotreload import (
     add_model_entry,
@@ -21,6 +28,7 @@ from .hotreload import (
     delete_model_by_name,
     full_reload as do_full_reload,
 )
+from src.config.config import runtime_config
 
 admin_router = APIRouter(prefix="/admin/api", tags=["admin"])
 security = HTTPBearer(auto_error=False)
@@ -29,7 +37,7 @@ _env_file: Optional[EnvFile] = None
 
 
 def _get_env_file() -> EnvFile:
-    """Get or create the EnvFile singleton."""
+    """Get or create the EnvFile singleton (for reading basic settings)."""
     global _env_file
     if _env_file is None:
         _env_file = EnvFile()
@@ -95,13 +103,41 @@ class KeyAddRequest(BaseModel):
     key: str
 
 
+class MasterKeyUpdateRequest(BaseModel):
+    master_key: str
+
+
+class UpstreamProxyUpdateRequest(BaseModel):
+    proxy_url: str
+
+
+# ---------------------------------------------------------------------------
+# Helpers — sync DB → os.environ so hot-reload & downstream code see changes
+# ---------------------------------------------------------------------------
+
+
+def _sync_db_to_environ() -> None:
+    """Push models and keys from DB into os.environ."""
+    from src.config.parsing import sync_db_to_environ as do_sync
+    do_sync()
+
+
+def _schedule_full_hot_reload(background_tasks: BackgroundTasks) -> None:
+    """Schedule a full LiteLLM hot reload after the response is sent."""
+    background_tasks.add_task(_do_full_hot_reload)
+
+
+def _store():
+    """Return the active configuration store."""
+    return get_config_store()
+
+
 # --- Auth Endpoints ---
 
 
 @admin_router.post("/login")
 async def login(req: LoginRequest):
     if not is_auth_enabled():
-        # Auth disabled — generate a placeholder token
         from .auth import create_token
         token = create_token("anonymous")
         return {"token": token, "expires_in": 86400}
@@ -131,8 +167,7 @@ async def change_password(req: PasswordChangeRequest, _auth=Depends(require_auth
     if len(new_password) < 8:
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
 
-    env = _get_env_file()
-    env.set("ADMIN_PASSWORD", new_password)
+    _store().set_setting("ADMIN_PASSWORD", new_password)
     os.environ["ADMIN_PASSWORD"] = new_password
 
     return {"message": "Password updated"}
@@ -143,12 +178,9 @@ async def change_password(req: PasswordChangeRequest, _auth=Depends(require_auth
 
 @admin_router.get("/config")
 async def get_config(_auth=Depends(require_auth)):
-    env = _get_env_file()
-    data = env.read()
-
-    models_list = _parse_models(data)
-    api_keys = _parse_api_keys(data)
-    settings = _parse_settings(data)
+    models_list = _parse_models()
+    api_keys = _parse_api_keys()
+    settings = _parse_settings()
 
     return {
         "models": models_list,
@@ -159,9 +191,7 @@ async def get_config(_auth=Depends(require_auth)):
 
 @admin_router.get("/models")
 async def get_models(_auth=Depends(require_auth)):
-    env = _get_env_file()
-    data = env.read()
-    return {"models": _parse_models(data)}
+    return {"models": _parse_models()}
 
 
 @admin_router.get("/keys/{provider}")
@@ -170,10 +200,8 @@ async def get_keys(provider: str, _auth=Depends(require_auth)):
     if provider not in ("openai", "anthropic"):
         raise HTTPException(status_code=400, detail="Provider must be 'openai' or 'anthropic'")
 
-    env = _get_env_file()
-    data = env.read()
-    keys = _parse_api_keys(data).get(provider, [])
-    return {"provider": provider, "keys": keys}
+    keys = _store().get_api_keys(provider)
+    return {"provider": provider, "keys": [_mask_key(k) for k in keys]}
 
 
 # --- Telemetry Endpoints ---
@@ -212,33 +240,29 @@ async def create_model(req: ModelCreateRequest, _auth=Depends(require_auth)):
     if not req.upstream_model.strip():
         raise HTTPException(status_code=400, detail="upstream_model is required")
 
-    env = _get_env_file()
-    existing = env.get(f"MODEL_{key}_UPSTREAM_MODEL")
+    existing = _store().get_model(key)
     if existing:
         raise HTTPException(status_code=409, detail=f"Model key {key} already exists")
 
-    # Detect provider
     from src.config.models import detect_provider
     provider = req.provider or detect_provider(req.upstream_model)
 
-    items: Dict[str, str] = {
-        f"MODEL_{key}_UPSTREAM_MODEL": req.upstream_model.strip(),
-    }
-    if req.reasoning_effort:
-        items[f"MODEL_{key}_REASONING_EFFORT"] = req.reasoning_effort
-    if req.upstream_base:
-        items[f"MODEL_{key}_UPSTREAM_BASE"] = req.upstream_base
-    if req.provider:
-        items[f"MODEL_{key}_PROVIDER"] = req.provider
+    _store().save_model(
+        key=key,
+        upstream_model=req.upstream_model.strip(),
+        upstream_base=req.upstream_base,
+        provider=req.provider,
+        reasoning_effort=req.reasoning_effort,
+    )
 
-    env.set_many(items)
-
-    # Update os.environ so hot reload can see the changes
-    for k, v in items.items():
-        os.environ[k] = v
-
-    # Hot reload: add model to running LiteLLM
-    _hot_add_model(key, req.upstream_model, provider, req.reasoning_effort)
+    _sync_db_to_environ()
+    await run_in_threadpool(
+        _hot_add_model,
+        key,
+        req.upstream_model,
+        provider,
+        req.reasoning_effort,
+    )
 
     from src.config.models import derive_alias
     return {
@@ -256,53 +280,43 @@ async def create_model(req: ModelCreateRequest, _auth=Depends(require_auth)):
 @admin_router.put("/models/{key}")
 async def update_model(key: str, req: ModelUpdateRequest, _auth=Depends(require_auth)):
     key = key.upper().strip()
-    env = _get_env_file()
-    existing = env.get(f"MODEL_{key}_UPSTREAM_MODEL")
+    existing = _store().get_model(key)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Model key {key} not found")
 
-    old_model_name = existing
+    old_model_name = existing["upstream_model"]
 
-    items: Dict[str, str] = {}
-    keys_to_delete: List[str] = []
-    if req.upstream_model:
-        items[f"MODEL_{key}_UPSTREAM_MODEL"] = req.upstream_model
-    if req.reasoning_effort is not None:
-        if req.reasoning_effort:
-            items[f"MODEL_{key}_REASONING_EFFORT"] = req.reasoning_effort
-        else:
-            keys_to_delete.append(f"MODEL_{key}_REASONING_EFFORT")
-    if req.upstream_base is not None:
-        if req.upstream_base:
-            items[f"MODEL_{key}_UPSTREAM_BASE"] = req.upstream_base
-        else:
-            keys_to_delete.append(f"MODEL_{key}_UPSTREAM_BASE")
-    if req.provider is not None:
-        items[f"MODEL_{key}_PROVIDER"] = req.provider
+    new_upstream = req.upstream_model or existing["upstream_model"]
+    new_provider = req.provider or existing.get("provider")
 
-    changed = bool(items or keys_to_delete)
+    new_reasoning = req.reasoning_effort
+    if new_reasoning is None:
+        new_reasoning = existing.get("reasoning_effort")
+    elif new_reasoning == "":
+        new_reasoning = None
 
-    if items:
-        env.set_many(items)
-        for k, v in items.items():
-            os.environ[k] = v
+    new_base = req.upstream_base
+    if new_base is None:
+        new_base = existing.get("upstream_base")
+    elif new_base == "":
+        new_base = None
 
-    for k in keys_to_delete:
-        env.delete_key(k)
-        os.environ.pop(k, None)
+    _store().save_model(
+        key=key,
+        upstream_model=new_upstream,
+        upstream_base=new_base,
+        provider=new_provider,
+        reasoning_effort=new_reasoning,
+    )
 
-    if not changed:
-        return {"message": "No changes", "key": key}
+    _sync_db_to_environ()
 
-    # Hot reload: delete old, add new
-    from src.config.models import derive_alias
+    from src.config.models import derive_alias, detect_provider
     old_alias = derive_alias(old_model_name)
-    delete_model_by_name(old_alias)
+    await run_in_threadpool(delete_model_by_name, old_alias)
 
-    new_model = req.upstream_model or existing
-    from src.config.models import detect_provider
-    provider = req.provider or detect_provider(new_model)
-    _hot_add_model(key, new_model, provider, req.reasoning_effort)
+    provider = new_provider or detect_provider(new_upstream)
+    await run_in_threadpool(_hot_add_model, key, new_upstream, provider, new_reasoning)
 
     return {"message": "Model updated", "key": key}
 
@@ -310,25 +324,16 @@ async def update_model(key: str, req: ModelUpdateRequest, _auth=Depends(require_
 @admin_router.delete("/models/{key}")
 async def delete_model(key: str, _auth=Depends(require_auth)):
     key = key.upper().strip()
-    env = _get_env_file()
-    existing = env.get(f"MODEL_{key}_UPSTREAM_MODEL")
+    existing = _store().get_model(key)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Model key {key} not found")
 
     from src.config.models import derive_alias
-    alias = derive_alias(existing)
+    alias = derive_alias(existing["upstream_model"])
 
-    # Delete all MODEL_<KEY>_* entries from .env
-    env.delete(f"MODEL_{key}_")
-
-    # Clean os.environ
-    prefix = f"MODEL_{key}_"
-    for k in list(os.environ.keys()):
-        if k.upper().startswith(prefix):
-            os.environ.pop(k, None)
-
-    # Hot reload: remove from running LiteLLM
-    delete_model_by_name(alias)
+    _store().delete_model(key)
+    _sync_db_to_environ()
+    await run_in_threadpool(delete_model_by_name, alias)
 
     return {"message": "Model removed", "key": key, "alias": alias}
 
@@ -337,73 +342,121 @@ async def delete_model(key: str, _auth=Depends(require_auth)):
 
 
 @admin_router.put("/keys/{provider}")
-async def update_keys(provider: str, req: KeysUpdateRequest, _auth=Depends(require_auth)):
+async def update_keys(
+    provider: str,
+    req: KeysUpdateRequest,
+    background_tasks: BackgroundTasks,
+    _auth=Depends(require_auth),
+):
     provider = provider.lower()
     if provider not in ("openai", "anthropic"):
         raise HTTPException(status_code=400, detail="Provider must be 'openai' or 'anthropic'")
 
-    env_var = f"{provider.upper()}_API_KEYS"
-    value = ",".join(req.keys)
+    _store().set_api_keys(provider, req.keys)
+    _sync_db_to_environ()
+    _schedule_full_hot_reload(background_tasks)
 
-    env = _get_env_file()
-    env.set(env_var, value)
-    os.environ[env_var] = value
-
-    # Full hot reload needed when keys change
-    result = _do_full_hot_reload()
-
-    return {
-        "message": "Keys updated",
-        "count": len(req.keys),
-        "reload": result,
-    }
+    return {"message": "Keys updated", "count": len(req.keys), "reload": {"scheduled": True}}
 
 
 @admin_router.post("/keys/{provider}")
-async def add_key(provider: str, req: KeyAddRequest, _auth=Depends(require_auth)):
+async def add_key(
+    provider: str,
+    req: KeyAddRequest,
+    background_tasks: BackgroundTasks,
+    _auth=Depends(require_auth),
+):
     provider = provider.lower()
     if provider not in ("openai", "anthropic"):
         raise HTTPException(status_code=400, detail="Provider must be 'openai' or 'anthropic'")
 
-    env_var = f"{provider.upper()}_API_KEYS"
-    env = _get_env_file()
-    current = env.get(env_var) or ""
-    from src.config.rendering import parse_api_keys
-    keys = parse_api_keys(current)
-    keys.append(req.key)
+    count = _store().add_api_key(provider, req.key)
+    _sync_db_to_environ()
+    _schedule_full_hot_reload(background_tasks)
 
-    value = ",".join(keys)
-    env.set(env_var, value)
-    os.environ[env_var] = value
-
-    result = _do_full_hot_reload()
-
-    return {"message": "Key added", "count": len(keys), "reload": result}
+    return {"message": "Key added", "count": count, "reload": {"scheduled": True}}
 
 
 @admin_router.delete("/keys/{provider}/{index}")
-async def remove_key(provider: str, index: int, _auth=Depends(require_auth)):
+async def remove_key(
+    provider: str,
+    index: int,
+    background_tasks: BackgroundTasks,
+    _auth=Depends(require_auth),
+):
     provider = provider.lower()
     if provider not in ("openai", "anthropic"):
         raise HTTPException(status_code=400, detail="Provider must be 'openai' or 'anthropic'")
 
-    env_var = f"{provider.upper()}_API_KEYS"
-    env = _get_env_file()
-    current = env.get(env_var) or ""
-    from src.config.rendering import parse_api_keys
-    keys = parse_api_keys(current)
-
+    keys = _store().get_api_keys(provider)
     if index < 0 or index >= len(keys):
         raise HTTPException(status_code=400, detail=f"Index {index} out of range (0-{len(keys)-1})")
 
-    removed = keys.pop(index)
-    value = ",".join(keys)
-    env.set(env_var, value)
-    os.environ[env_var] = value
+    removed = _store().remove_api_key(provider, index)
+    _sync_db_to_environ()
+    _schedule_full_hot_reload(background_tasks)
 
-    result = _do_full_hot_reload()
+    return {
+        "message": "Key removed",
+        "removed_key": _mask_key(removed or ""),
+        "count": len(keys) - 1,
+        "reload": {"scheduled": True},
+    }
 
-    return {"message": "Key removed", "removed_key": _mask_key(removed), "count": len(keys), "reload": result}
+
+# --- Settings Management Endpoints ---
+
+
+@admin_router.put("/settings/master-key")
+async def update_master_key(
+    req: MasterKeyUpdateRequest,
+    _auth=Depends(require_auth),
+):
+    master_key = req.master_key.strip()
+    if len(master_key) < 8:
+        raise HTTPException(status_code=400, detail="Master Key must be at least 8 characters")
+
+    _store().set_setting("LITELLM_MASTER_KEY", master_key)
+
+    return {
+        "message": "Master Key saved",
+        "requires_restart": True,
+        "setting": {
+            "key": "LITELLM_MASTER_KEY",
+            "value": _mask_key(master_key),
+        },
+    }
+
+
+@admin_router.put("/settings/upstream-proxy")
+async def update_upstream_proxy(
+    req: UpstreamProxyUpdateRequest,
+    _auth=Depends(require_auth),
+):
+    proxy_url = req.proxy_url.strip()
+    if proxy_url:
+        if not re.match(r"^(https?|socks4a?|socks5h?|socks)://", proxy_url, re.IGNORECASE):
+            raise HTTPException(
+                status_code=400,
+                detail="Proxy URL must start with http://, https://, socks://, socks4://, or socks5://",
+            )
+        _store().set_setting("UPSTREAM_PROXY_URL", proxy_url)
+    else:
+        _store().delete_setting("UPSTREAM_PROXY_URL")
+
+    os.environ["UPSTREAM_PROXY_URL"] = proxy_url
+    from .node_proxy import sync_upstream_proxy
+    node_result = sync_upstream_proxy(proxy_url)
+
+    return {
+        "message": "Upstream proxy saved",
+        "requires_restart": False,
+        "node_proxy": node_result,
+        "setting": {
+            "key": "UPSTREAM_PROXY_URL",
+            "value": _mask_proxy_url(proxy_url) if proxy_url else "",
+        },
+    }
 
 
 # --- System Endpoints ---
@@ -411,7 +464,7 @@ async def remove_key(provider: str, index: int, _auth=Depends(require_auth)):
 
 @admin_router.post("/reload")
 async def reload_config(_auth=Depends(require_auth)):
-    result = _do_full_hot_reload()
+    result = await run_in_threadpool(_do_full_hot_reload)
     return {"message": "Configuration reloaded", **result}
 
 
@@ -420,66 +473,82 @@ async def health():
     return {"status": "ok", "version": "1.0.0"}
 
 
-# --- Helper Functions ---
+# ---------------------------------------------------------------------------
+# Helper Functions
+# ---------------------------------------------------------------------------
 
 
-def _parse_models(data: Dict[str, str]) -> List[Dict[str, Any]]:
-    """Parse model entries from env data."""
+def _parse_models() -> List[Dict[str, Any]]:
+    """Parse model entries from ConfigStore."""
     from src.config.models import detect_provider
 
-    pattern = re.compile(r"^MODEL_([A-Z0-9_]+)_UPSTREAM_MODEL$")
     models: List[Dict[str, Any]] = []
-
-    for key, value in sorted(data.items()):
-        m = pattern.match(key)
-        if m:
-            model_key = m.group(1)
-            provider = data.get(f"MODEL_{model_key}_PROVIDER") or detect_provider(value)
-            models.append({
-                "key": model_key,
-                "upstream_model": value,
-                "provider": provider,
-                "reasoning_effort": data.get(f"MODEL_{model_key}_REASONING_EFFORT"),
-                "upstream_base": data.get(f"MODEL_{model_key}_UPSTREAM_BASE"),
-                "api_key": _mask_key(data.get(f"MODEL_{model_key}_API_KEY", "")),
-            })
-
+    for m in _store().get_all_models():
+        provider = m.get("provider") or detect_provider(m["upstream_model"])
+        models.append({
+            "key": m["key"],
+            "upstream_model": m["upstream_model"],
+            "provider": provider,
+            "reasoning_effort": m.get("reasoning_effort"),
+            "upstream_base": m.get("upstream_base"),
+            "api_key": None,
+        })
     return models
 
 
-def _parse_api_keys(data: Dict[str, str]) -> Dict[str, List[str]]:
-    """Parse API keys from env data."""
-    from src.config.rendering import parse_api_keys
-
+def _parse_api_keys() -> Dict[str, List[str]]:
+    """Parse API keys from ConfigStore."""
     result: Dict[str, List[str]] = {}
     for provider in ("openai", "anthropic"):
-        keys_str = data.get(f"{provider.upper()}_API_KEYS", "")
-        keys = parse_api_keys(keys_str)
-        if not keys:
-            single_key = data.get(f"{provider.upper()}_API_KEY", "")
-            if single_key:
-                keys = [single_key]
+        keys = _store().get_api_keys(provider)
         result[provider] = [_mask_key(k) for k in keys]
-
     return result
 
 
-def _parse_settings(data: Dict[str, str]) -> Dict[str, str]:
-    """Parse general settings from env data."""
-    settings_keys = [
+def _parse_settings() -> Dict[str, str]:
+    """Parse general settings from .env and ConfigStore."""
+    env = _get_env_file()
+    data = env.read()
+
+    result: Dict[str, str] = {}
+    for k in (
         "PORT", "LITELLM_MASTER_KEY", "OPENAI_BASE_URL",
         "STREAMING_ENABLE", "TELEMETRY_ENABLE",
         "NODE_UPSTREAM_PROXY_ENABLE", "REASONING_EFFORT",
-        "MAX_TOKENS",
-    ]
-    result: Dict[str, str] = {}
-    for k in settings_keys:
+        "MAX_TOKENS", "UPSTREAM_PROXY_URL",
+    ):
         if k in data:
             if "KEY" in k:
                 result[k] = _mask_key(data[k])
             else:
                 result[k] = data[k]
+
+    # Admin-managed settings from ConfigStore (fall back to .env).
+    for k in ("ADMIN_USERNAME", "ADMIN_PASSWORD", "LITELLM_MASTER_KEY", "UPSTREAM_PROXY_URL"):
+        val = _store().get_setting(k) or data.get(k, "")
+        if val:
+            if k == "UPSTREAM_PROXY_URL":
+                result[k] = _mask_proxy_url(val)
+            else:
+                result[k] = _mask_key(val) if "PASSWORD" in k or "KEY" in k else val
+
     return result
+
+
+def _mask_proxy_url(proxy_url: str) -> str:
+    """Mask userinfo in a proxy URL for display."""
+    if not proxy_url:
+        return ""
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+
+        parts = urlsplit(proxy_url)
+        if "@" not in parts.netloc:
+            return proxy_url
+        host_part = parts.netloc.rsplit("@", 1)[1]
+        return urlunsplit((parts.scheme, f"***:***@{host_part}", parts.path, parts.query, parts.fragment))
+    except Exception:
+        return "***"
 
 
 def _mask_key(key: str) -> str:
@@ -500,7 +569,7 @@ def _hot_add_model(
 
     alias = derive_alias(upstream_model)
     api_base = _get_api_base(provider)
-    api_key = _get_provider_key(provider)
+    api_key = _get_first_provider_key(provider)
 
     if not api_key:
         return
@@ -518,73 +587,70 @@ def _hot_add_model(
 
 def _get_api_base(provider: str) -> str:
     """Get the API base URL for a provider."""
+    node_proxy_base = _get_node_proxy_base()
+    if node_proxy_base:
+        if provider == "anthropic":
+            return node_proxy_base
+        return f"{node_proxy_base}/v1"
+
     if provider == "anthropic":
-        return os.getenv("ANTHROPIC_BASE_URL", "https://agentrouter.org")
-    return os.getenv("OPENAI_BASE_URL", "https://agentrouter.org/v1")
+        return runtime_config.get_str("ANTHROPIC_BASE_URL", "https://agentrouter.org")
+    return runtime_config.get_str("OPENAI_BASE_URL", "https://agentrouter.org/v1")
 
 
-def _get_provider_key(provider: str) -> str:
-    """Get the first available API key for a provider."""
-    env = _get_env_file()
-    data = env.read()
-    from src.config.rendering import parse_api_keys
+def _get_node_proxy_base() -> Optional[str]:
+    """Return the Node proxy base URL used by admin hot reload."""
+    runtime_config.ensure_loaded()
+    if not runtime_config.get_bool("NODE_UPSTREAM_PROXY_ENABLE", True):
+        return None
 
-    keys_str = data.get(f"{provider.upper()}_API_KEYS", "")
-    keys = parse_api_keys(keys_str)
-    if keys:
-        return keys[0]
+    explicit_base_url = runtime_config.get_str("ADMIN_NODE_PROXY_BASE_URL")
+    if explicit_base_url:
+        return _strip_v1_suffix(explicit_base_url)
 
-    single_key = data.get(f"{provider.upper()}_API_KEY", "")
-    if "," in single_key:
-        split_keys = parse_api_keys(single_key)
-        return split_keys[0] if split_keys else ""
+    try:
+        socket.gethostbyname("node-proxy")
+        return "http://node-proxy:4000"
+    except socket.gaierror:
+        return "http://127.0.0.1:4000"
 
-    return single_key
+
+def _strip_v1_suffix(base_url: str) -> str:
+    """Normalize a base URL to the Node proxy root."""
+    normalized_base_url = base_url.rstrip("/")
+    return normalized_base_url[:-3] if normalized_base_url.endswith("/v1") else normalized_base_url
+
+
+def _get_first_provider_key(provider: str) -> str:
+    """Get the first available API key for a provider from ConfigStore."""
+    keys = _store().get_api_keys(provider)
+    return keys[0] if keys else os.getenv(f"{provider.upper()}_API_KEY", "")
 
 
 def _do_full_hot_reload() -> Dict[str, Any]:
-    """Perform a full hot reload from .env state."""
-    env = _get_env_file()
-    data = env.read()
+    """Perform a full hot reload from ConfigStore state."""
+    from src.config.models import detect_provider, derive_alias
 
-    from src.config.rendering import parse_api_keys
-    from src.config.models import detect_provider, derive_alias, PROVIDER_ANTHROPIC
-
-    # Collect provider keys
     provider_keys: Dict[str, List[str]] = {}
     for provider in ("openai", "anthropic"):
-        keys_str = data.get(f"{provider.upper()}_API_KEYS", "")
-        keys = parse_api_keys(keys_str)
-        if not keys:
-            single = data.get(f"{provider.upper()}_API_KEY", "")
-            if "," in single:
-                keys = parse_api_keys(single)
-            elif single:
-                keys = [single]
+        keys = _store().get_api_keys(provider)
         if keys:
             provider_keys[provider] = keys
 
-    # Build model entries
-    pattern = re.compile(r"^MODEL_([A-Z0-9_]+)_UPSTREAM_MODEL$")
     entries: List[Dict[str, Any]] = []
-
-    for key, value in sorted(data.items()):
-        m = pattern.match(key)
-        if not m:
-            continue
-        model_key = m.group(1)
-        provider = data.get(f"MODEL_{model_key}_PROVIDER") or detect_provider(value)
-        reasoning = data.get(f"MODEL_{model_key}_REASONING_EFFORT")
-        alias = derive_alias(value)
+    for m in _store().get_all_models():
+        alias = derive_alias(m["upstream_model"])
+        provider = m.get("provider") or detect_provider(m["upstream_model"])
         api_base = _get_api_base(provider)
+        reasoning = m.get("reasoning_effort")
         keys = provider_keys.get(provider, [])
 
         if len(keys) > 1:
             for k in keys:
-                entry = build_model_entry(alias, provider, api_base, k, value, reasoning)
+                entry = build_model_entry(alias, provider, api_base, k, m["upstream_model"], reasoning)
                 entries.append(entry)
         elif keys:
-            entry = build_model_entry(alias, provider, api_base, keys[0], value, reasoning)
+            entry = build_model_entry(alias, provider, api_base, keys[0], m["upstream_model"], reasoning)
             entries.append(entry)
 
     return do_full_reload(entries)

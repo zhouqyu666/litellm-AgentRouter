@@ -80,12 +80,14 @@ test("NodeProxyConfig.fromEnv reads from environment variables", () => {
   const originalUserAgent = process.env.NODE_USER_AGENT;
   const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
   const originalAnthropicBase = process.env.ANTHROPIC_BASE_URL;
+  const originalProxyUrl = process.env.UPSTREAM_PROXY_URL;
 
   process.env.OPENAI_API_KEY = "sk-from-env";
   process.env.OPENAI_BASE_URL = "https://env.api/v1";
   process.env.NODE_USER_AGENT = "EnvAgent/2.0";
   process.env.ANTHROPIC_API_KEY = "sk-ant-from-env";
   process.env.ANTHROPIC_BASE_URL = "https://ant-env.api";
+  process.env.UPSTREAM_PROXY_URL = "socks5://user:pass@127.0.0.1:1080";
 
   try {
     const config = NodeProxyConfig.fromEnv();
@@ -95,6 +97,7 @@ test("NodeProxyConfig.fromEnv reads from environment variables", () => {
     assert.strictEqual(config.userAgent, "EnvAgent/2.0");
     assert.strictEqual(config.anthropicFallbackApiKey, "sk-ant-from-env");
     assert.strictEqual(config.anthropicUpstreamBase, "https://ant-env.api");
+    assert.strictEqual(config.upstreamProxyUrl, "socks5://user:pass@127.0.0.1:1080");
   } finally {
     if (originalApiKey) {
       process.env.OPENAI_API_KEY = originalApiKey;
@@ -120,6 +123,11 @@ test("NodeProxyConfig.fromEnv reads from environment variables", () => {
       process.env.ANTHROPIC_BASE_URL = originalAnthropicBase;
     } else {
       delete process.env.ANTHROPIC_BASE_URL;
+    }
+    if (originalProxyUrl) {
+      process.env.UPSTREAM_PROXY_URL = originalProxyUrl;
+    } else {
+      delete process.env.UPSTREAM_PROXY_URL;
     }
   }
 });

@@ -75,6 +75,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`/admin/api${path}`, { ...init, headers });
   const data = await response.json().catch(() => ({}));
   if (response.status === 401) {
+    if (path === '/login') {
+      throw new Error(data.detail === 'Invalid credentials' ? '账号或密码错误' : data.detail || '账号或密码错误');
+    }
     clearToken();
     throw new Error('登录已过期，请重新登录');
   }
@@ -101,6 +104,28 @@ export async function changePassword(oldPassword: string, newPassword: string) {
   return request<{ message: string }>('/auth/password', {
     method: 'PUT',
     body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+  });
+}
+
+export async function updateMasterKey(masterKey: string) {
+  return request<{
+    message: string;
+    requires_restart: boolean;
+    setting: { key: string; value: string };
+  }>('/settings/master-key', {
+    method: 'PUT',
+    body: JSON.stringify({ master_key: masterKey }),
+  });
+}
+
+export async function updateUpstreamProxy(proxyUrl: string) {
+  return request<{
+    message: string;
+    requires_restart: boolean;
+    setting: { key: string; value: string };
+  }>('/settings/upstream-proxy', {
+    method: 'PUT',
+    body: JSON.stringify({ proxy_url: proxyUrl }),
   });
 }
 

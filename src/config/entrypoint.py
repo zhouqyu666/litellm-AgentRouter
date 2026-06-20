@@ -15,7 +15,14 @@ from typing import NoReturn
 
 from .config import runtime_config
 from ..node.process import NodeProxyProcess
-from .parsing import discover_model_keys, load_model_specs_from_env, _collect_provider_api_keys
+from .parsing import (
+    discover_model_keys,
+    load_model_specs,
+    collect_provider_api_keys,
+    auto_migrate_from_env_if_db_empty,
+    get_runtime_setting,
+    sync_db_to_environ,
+)
 from .rendering import render_config
 
 
@@ -23,16 +30,38 @@ def validate_environment() -> None:
     """Validate required environment variables.
 
     Raises:
-        SystemExit: If no MODEL_<KEY>_UPSTREAM_MODEL variables are defined
+        SystemExit: If no model definitions are found in the active backend.
     """
     runtime_config.ensure_loaded()
 
+    config_backend = os.getenv("CONFIG_BACKEND", "db").lower()
+
+    # DB mode can start with an empty model table so the Admin UI can be used
+    # for first-time model/API key setup.
+    if config_backend != "env":
+        return
+
+    # Legacy env mode still requires at least one MODEL_* definition.
     if not discover_model_keys():
         print(
-            "ERROR: Define at least one MODEL_<KEY>_UPSTREAM_MODEL environment variable.",
+            "ERROR: Define at least one model (via Admin UI or MODEL_<KEY>_UPSTREAM_MODEL env vars).",
             file=sys.stderr,
         )
         sys.exit(1)
+
+
+def _get_config_store_safe():
+    """Try to import ConfigStore singleton, returning None on failure."""
+    try:
+        from src.admin.config_store import config_store
+        return config_store
+    except Exception:
+        return None
+
+
+def _use_db_backend() -> bool:
+    """Return True when SQLite configuration storage is active."""
+    return os.getenv("CONFIG_BACKEND", "db").lower() != "env"
 
 
 def mask_sensitive_value(value: str, visible_chars: int = 4, visible_suffix: int = 2) -> str:
@@ -103,6 +132,15 @@ def main() -> NoReturn:
     # Validate environment
     validate_environment()
 
+    if _use_db_backend():
+        # Auto-migrate existing .env data to SQLite on first run
+        migration_summary = auto_migrate_from_env_if_db_empty()
+        if migration_summary:
+            print(f"Migrated config from .env to SQLite: {migration_summary}")
+
+        # Sync DB data to os.environ for downstream compatibility
+        sync_db_to_environ()
+
     # Determine Node upstream configuration
     node_proxy_enabled = runtime_config.get_bool("NODE_UPSTREAM_PROXY_ENABLE", True)
     node_base_url = None
@@ -132,9 +170,21 @@ def main() -> NoReturn:
             node_base_url = "http://127.0.0.1:4000/v1"
             print(f"Routing LiteLLM upstream through Node helper at {node_base_url}")
 
-    # Load model specs from environment
+    if node_base_url:
+        try:
+            from src.admin.config_store import get_config_store
+            from src.admin.node_proxy import sync_upstream_proxy
+
+            proxy_url = get_config_store().get_setting("UPSTREAM_PROXY_URL") or os.getenv("UPSTREAM_PROXY_URL", "")
+            if proxy_url:
+                sync_result = sync_upstream_proxy(proxy_url, node_base_url)
+                print(f"Synced upstream proxy to Node helper: {sync_result}")
+        except Exception as exc:
+            print(f"WARNING: Failed to sync upstream proxy to Node helper: {exc}", file=sys.stderr)
+
+    # Load model specs from active backend (db or env)
     try:
-        model_specs = load_model_specs_from_env()
+        model_specs = load_model_specs()
     except ValueError as e:
         if node_process:
             node_process.stop()
@@ -144,7 +194,7 @@ def main() -> NoReturn:
     # Generate configuration
     runtime_config.ensure_loaded()
     global_upstream_base = node_base_url or runtime_config.get_str("OPENAI_BASE_URL", "https://agentrouter.org/v1")
-    master_key = runtime_config.get_str("LITELLM_MASTER_KEY", "sk-local-master")
+    master_key = get_runtime_setting("LITELLM_MASTER_KEY", "sk-local-master")
 
     # Derive node_proxy_base for Anthropic routing (strip /v1 suffix)
     node_proxy_base = None
@@ -153,8 +203,8 @@ def main() -> NoReturn:
         if node_proxy_base.endswith("/v1"):
             node_proxy_base = node_proxy_base[:-3]
 
-    # Collect API keys for all providers
-    provider_api_keys = _collect_provider_api_keys()
+    # Collect API keys for all providers from active backend
+    provider_api_keys = collect_provider_api_keys()
 
     try:
         config_text = render_config(

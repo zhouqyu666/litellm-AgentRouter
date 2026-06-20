@@ -29,12 +29,17 @@ services:
     volumes:
       - ./src:/app/src
       - ./admin-ui:/app/admin-ui
+      - ./data:/app/data
       - ./.env:/app/.env
       - ./entrypoint.sh:/app/entrypoint.sh
     env_file:
       - .env
     environment:
       ADMIN_PROXY_BASE_URL: http://127.0.0.1:4000
+      ADMIN_NODE_PROXY_BASE_URL: http://node-proxy:4000
+      CONFIG_BACKEND: db
+      CONFIG_DB_PATH: /app/data/config.sqlite3
+      TELEMETRY_DB_PATH: /app/data/telemetry.sqlite3
     restart: unless-stopped
     depends_on:
       node-proxy:

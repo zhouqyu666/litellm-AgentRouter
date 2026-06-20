@@ -88,6 +88,9 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
         # Build basic request context
         method = request.method
         path = request.url.path if hasattr(request, "url") and hasattr(request.url, "path") else "/"
+        if not self._is_model_api_path(path):
+            return await call_next(request)
+
         client_request_id = request.headers.get("x-request-id")
         remote_addr = self._get_remote_addr(request)
 
@@ -124,8 +127,6 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
         start_time = time.perf_counter()
         try:
             response = await call_next(request)
-            end_time = time.perf_counter()
-            duration_s = end_time - start_time
 
             # Emit ResponseCompleted if successful
             status_code = getattr(response, "status_code", 200)
@@ -136,11 +137,15 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
             # Extract usage and ensure stream replay
             if streaming:
                 response, usage_dict = await self._extract_streaming_usage(response)
+                if not usage_dict:
+                    missing_usage = True
             else:
                 response, usage_dict, parse_error = await self._extract_non_streaming_usage(response)
                 if not usage_dict:
                     missing_usage = True
 
+            end_time = time.perf_counter()
+            duration_s = end_time - start_time
             usage = to_usage_tokens(usage_dict)
 
             completion_event = {
@@ -186,6 +191,19 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
             telemetry_store.record(error_event)
             self._publish_event(error_event)
             raise
+
+    def _is_model_api_path(self, path: str) -> bool:
+        """Return True for OpenAI-compatible model endpoints we should log."""
+        return path in {
+            "/v1/models",
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/embeddings",
+            "/models",
+            "/chat/completions",
+            "/completions",
+            "/embeddings",
+        }
 
     def _publish_event(self, event: dict) -> None:
         """Publish event through pipeline if present; compatibility fallback."""

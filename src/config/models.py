@@ -12,7 +12,9 @@ PROVIDER_OPENAI = "openai"
 PROVIDER_ANTHROPIC = "anthropic"
 
 # Model name prefix → provider mapping
-_PROVIDER_PATTERNS: Dict[str, str] = {}
+_PROVIDER_PATTERNS: Dict[str, str] = {
+    "claude-": PROVIDER_ANTHROPIC,
+}
 
 
 def detect_provider(upstream_model: str) -> str:

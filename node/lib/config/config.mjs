@@ -8,7 +8,7 @@ import {
 import { DEFAULT_USER_AGENT } from "../fetch/fetchVersion.mjs";
 
 export class NodeProxyConfig {
-  constructor({ port, host, timeoutMs, upstreamBase, fallbackApiKey, userAgent, anthropicUpstreamBase, anthropicFallbackApiKey }) {
+  constructor({ port, host, timeoutMs, upstreamBase, fallbackApiKey, userAgent, anthropicUpstreamBase, anthropicFallbackApiKey, upstreamProxyUrl }) {
     this.port = port;
     this.host = host;
     this.timeoutMs = timeoutMs;
@@ -17,6 +17,7 @@ export class NodeProxyConfig {
     this.userAgent = userAgent;
     this.anthropicUpstreamBase = anthropicUpstreamBase;
     this.anthropicFallbackApiKey = anthropicFallbackApiKey;
+    this.upstreamProxyUrl = upstreamProxyUrl;
   }
 
   static fromEnv(overrides = {}) {
@@ -42,6 +43,12 @@ export class NodeProxyConfig {
       ?? process.env.ANTHROPIC_API_KEY
       ?? fallbackApiKey;
 
+    const upstreamProxyUrl = overrides.upstreamProxyUrl
+      ?? process.env.UPSTREAM_PROXY_URL
+      ?? process.env.HTTPS_PROXY
+      ?? process.env.HTTP_PROXY
+      ?? null;
+
     return new NodeProxyConfig({
       port,
       host,
@@ -51,6 +58,7 @@ export class NodeProxyConfig {
       userAgent,
       anthropicUpstreamBase,
       anthropicFallbackApiKey,
+      upstreamProxyUrl,
     });
   }
 }

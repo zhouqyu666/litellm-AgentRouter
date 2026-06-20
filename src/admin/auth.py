@@ -35,11 +35,22 @@ def is_auth_enabled() -> bool:
 
 
 def get_admin_credentials() -> tuple:
-    """Return (username, password) from env or defaults."""
-    return (
-        os.getenv("ADMIN_USERNAME", "").strip() or DEFAULT_ADMIN_USERNAME,
-        os.getenv("ADMIN_PASSWORD", "").strip() or DEFAULT_ADMIN_PASSWORD,
-    )
+    """Return (username, password) from ConfigStore, env, or defaults."""
+    username = _get_setting_or_env("ADMIN_USERNAME") or DEFAULT_ADMIN_USERNAME
+    password = _get_setting_or_env("ADMIN_PASSWORD") or DEFAULT_ADMIN_PASSWORD
+    return (username, password)
+
+
+def _get_setting_or_env(key: str) -> str:
+    """Read a setting from ConfigStore (preferred) or os.environ fallback."""
+    try:
+        from .config_store import get_config_store
+        val = get_config_store().get_setting(key)
+        if val:
+            return val
+    except Exception:
+        pass
+    return os.getenv(key, "").strip()
 
 
 def _hash_password(password: str) -> str:

@@ -47,7 +47,7 @@ function Login({ onLogin }: { onLogin: (user: AdminUser) => void }) {
       <label>密码<input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password"/></label>
       {error && <div className="error">{error}</div>}
       <button className="primary full">登录</button>
-      <p className="hint">首次启动默认账号 admin / changeme，生产环境请使用 ADMIN_USERNAME、ADMIN_PASSWORD 覆盖。</p>
+      <p className="hint">首次启动默认账号 admin / changeme，生产环境请登录后立即修改密码。</p>
     </form>
   </div>;
 }
@@ -124,7 +124,7 @@ function Layout({ user, onLogout }: { user: AdminUser; onLogout: () => void }) {
       {page === 'models' && <ModelsPage config={config} onChanged={load} setToast={setToast}/>}
       {page === 'keys' && <KeysPage config={config} onChanged={load} setToast={setToast}/>}
       {page === 'logs' && <LogsPage logs={logs} summary={summary}/>}
-      {page === 'settings' && <SettingsPage config={config}/>}
+      {page === 'settings' && <SettingsPage config={config} onChanged={load} setToast={setToast}/>}
       {page === 'security' && <SecurityPage onLogout={onLogout}/>}
     </main>
   </div>;
@@ -193,8 +193,8 @@ function KeysPage({ config, onChanged, setToast }: { config: ApiConfig; onChange
   const keys = config.api_keys?.[provider] || [];
   return <div className="panel">
     <div className="toolbar"><h2>上游 API Key</h2><div className="table-actions"><button className={provider === 'openai' ? 'primary' : 'ghost'} onClick={() => setProvider('openai')}>OpenAI</button><button className={provider === 'anthropic' ? 'primary' : 'ghost'} onClick={() => setProvider('anthropic')}>Anthropic</button></div></div>
-    <div className="table-wrap"><table><thead><tr><th>序号</th><th>Key</th><th>操作</th></tr></thead><tbody>{keys.map((key, index) => <tr key={`${key}-${index}`}><td>{index + 1}</td><td><code>{key}</code></td><td><button className="ghost danger" onClick={async () => { await api.deleteProviderKey(provider, index); setToast('API Key 已删除'); await onChanged(); }}>删除</button></td></tr>)}{keys.length === 0 && <tr><td colSpan={3}>暂无 API Key</td></tr>}</tbody></table></div>
-    <div className="inline-form"><label>添加新的上游 API Key<input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="sk-..."/></label><button className="primary" onClick={async () => { if (!newKey.trim()) return; await api.addProviderKey(provider, newKey.trim()); setNewKey(''); setToast('API Key 已添加'); await onChanged(); }}>添加 Key</button></div>
+    <div className="table-wrap"><table><thead><tr><th>序号</th><th>Key</th><th>操作</th></tr></thead><tbody>{keys.map((key, index) => <tr key={`${key}-${index}`}><td>{index + 1}</td><td><code>{key}</code></td><td><button className="ghost danger" onClick={async () => { await api.deleteProviderKey(provider, index); setToast('API Key 已删除，后台重载中'); await onChanged(); }}>删除</button></td></tr>)}{keys.length === 0 && <tr><td colSpan={3}>暂无 API Key</td></tr>}</tbody></table></div>
+    <div className="inline-form"><label>添加新的上游 API Key<input value={newKey} onChange={e => setNewKey(e.target.value)} placeholder="sk-..."/></label><button className="primary" onClick={async () => { if (!newKey.trim()) return; await api.addProviderKey(provider, newKey.trim()); setNewKey(''); setToast('API Key 已保存，后台重载中'); await onChanged(); }}>添加 Key</button></div>
   </div>;
 }
 
@@ -202,9 +202,83 @@ function LogsPage({ logs, summary }: { logs: RequestLog[]; summary: TelemetrySum
   return <><div className="panel"><h2>模型消耗汇总</h2><SummaryTable summary={summary}/></div><div className="panel"><h2>请求日志（SQLite 持久化）</h2><div className="table-wrap"><table><thead><tr><th>时间</th><th>客户端</th><th>模型</th><th>上游</th><th>状态</th><th>耗时</th><th>Tokens</th><th>请求 ID</th><th>错误</th></tr></thead><tbody>{logs.map((row, index) => <tr key={index}><td>{fmtTime(row.timestamp)}</td><td>{row.remote_addr || '-'}</td><td>{row.model_alias}</td><td>{truncate(row.upstream_model, 34)}</td><td>{row.status_code || '-'}</td><td>{row.duration_s == null ? '-' : `${row.duration_s.toFixed(3)}s`}</td><td>{fmt(row.usage?.total_tokens)}</td><td>{truncate(row.client_request_id || '-', 24)}</td><td>{row.error_type ? <span className="chip error">{row.error_type}</span> : '-'}</td></tr>)}{logs.length === 0 && <tr><td colSpan={9}>暂无请求日志</td></tr>}</tbody></table></div></div></>;
 }
 
-function SettingsPage({ config }: { config: ApiConfig }) {
+function SettingsPage({ config, onChanged, setToast }: { config: ApiConfig; onChanged: () => Promise<void>; setToast: (value: string) => void }) {
   const entries = useMemo(() => Object.entries(config.settings || {}), [config.settings]);
-  return <div className="grid-two"><div className="panel"><h2>运行配置</h2><div className="table-wrap"><table><thead><tr><th>配置项</th><th>值</th></tr></thead><tbody>{entries.map(([key, value]) => <tr key={key}><td>{key}</td><td>{value}</td></tr>)}</tbody></table></div></div><div className="panel"><h2>数据存储</h2><p><Database/> 请求日志已写入 SQLite。默认路径：<code>data/telemetry.sqlite3</code>，可通过 <code>TELEMETRY_DB_PATH</code> 覆盖。</p></div></div>;
+  const [masterKey, setMasterKey] = useState('');
+  const [proxyUrl, setProxyUrl] = useState('');
+  const [error, setError] = useState('');
+  const [proxyError, setProxyError] = useState('');
+
+  async function saveMasterKey(event: React.FormEvent) {
+    event.preventDefault();
+    setError('');
+    if (masterKey.trim().length < 8) {
+      setError('Master Key 至少 8 位');
+      return;
+    }
+    try {
+      await api.updateMasterKey(masterKey.trim());
+      setMasterKey('');
+      setToast('对外 API Key 已保存，重启容器后生效');
+      await onChanged();
+    } catch (err: any) {
+      setError(err.message || '保存失败');
+    }
+  }
+
+  async function saveProxy(event: React.FormEvent) {
+    event.preventDefault();
+    setProxyError('');
+    const value = proxyUrl.trim();
+    if (value && !/^(https?|socks4a?|socks5h?|socks):\/\//i.test(value)) {
+      setProxyError('代理地址必须以 http://、https://、socks:// 或 socks5:// 开头');
+      return;
+    }
+    try {
+      await api.updateUpstreamProxy(value);
+      setProxyUrl('');
+      setToast(value ? '上游访问代理已保存，并已同步到运行中的上游代理服务' : '上游访问代理已清空，并已同步到运行中的上游代理服务');
+      await onChanged();
+    } catch (err: any) {
+      setProxyError(err.message || '保存失败');
+    }
+  }
+
+  return <div className="grid-two">
+    <div className="panel">
+      <h2>运行配置</h2>
+      <div className="table-wrap"><table><thead><tr><th>配置项</th><th>值</th></tr></thead><tbody>{entries.map(([key, value]) => <tr key={key}><td>{key}</td><td>{value}</td></tr>)}</tbody></table></div>
+    </div>
+    <div className="panel">
+      <h2>对外 API Key</h2>
+      <p>Cherry Studio 等客户端使用这里的 <code>LITELLM_MASTER_KEY</code> 访问 <code>/v1/models</code> 和 <code>/v1/chat/completions</code>。</p>
+      <form onSubmit={saveMasterKey}>
+        <label>当前值<input value={config.settings.LITELLM_MASTER_KEY || ''} disabled /></label>
+        <label>新的对外 API Key<input value={masterKey} onChange={e => setMasterKey(e.target.value)} placeholder="sk-..." autoComplete="new-password"/></label>
+        {error && <div className="error">{error}</div>}
+        <button className="primary"><Save size={16}/>保存 Key</button>
+      </form>
+      <p className="hint">保存会写入 <code>data/config.sqlite3</code>。LiteLLM 的鉴权配置在启动时加载，修改后需要重启容器。</p>
+    </div>
+    <div className="panel">
+      <h2>上游网络代理</h2>
+      <p>配置后，Node 上游代理会通过该地址访问 <code>agentrouter.org</code> 等上游 API；留空则使用服务器原生网络。</p>
+      <form onSubmit={saveProxy}>
+        <label>当前值<input value={config.settings.UPSTREAM_PROXY_URL || ''} disabled /></label>
+        <label>新的代理地址<input value={proxyUrl} onChange={e => setProxyUrl(e.target.value)} placeholder="socks5://user:pass@host:port" autoComplete="off"/></label>
+        {proxyError && <div className="error">{proxyError}</div>}
+        <div className="table-actions">
+          <button className="ghost" type="button" onClick={async () => { setProxyUrl(''); await api.updateUpstreamProxy(''); setToast('上游访问代理已清空，并已同步到运行中的上游代理服务'); await onChanged(); }}>清空代理</button>
+          <button className="primary"><Save size={16}/>保存代理</button>
+        </div>
+      </form>
+      <p className="hint">支持 <code>http://</code>、<code>https://</code>、<code>socks://</code>、<code>socks5://</code>。代理账号密码只会掩码展示。</p>
+    </div>
+    <div className="panel">
+      <h2>数据存储</h2>
+      <p><Database/> 模型、API Key 和管理员密码存储在 <code>data/config.sqlite3</code>；请求日志存储在 <code>data/telemetry.sqlite3</code>。</p>
+    </div>
+  </div>;
 }
 
 function SecurityPage({ onLogout }: { onLogout: () => void }) {
@@ -237,7 +311,7 @@ function SecurityPage({ onLogout }: { onLogout: () => void }) {
 
   return <div className="panel" style={{ maxWidth: 620 }}>
     <h2>修改管理员密码</h2>
-    <p>密码会写入当前 `.env` 的 <code>ADMIN_PASSWORD</code>。修改成功后需要重新登录。</p>
+    <p>密码会写入 SQLite 配置库。修改成功后需要重新登录。</p>
     <form onSubmit={submit}>
       <label>旧密码<input type="password" value={oldPassword} onChange={e => setOldPassword(e.target.value)} autoComplete="current-password"/></label>
       <label>新密码<input type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} autoComplete="new-password"/></label>

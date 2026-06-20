@@ -1,14 +1,18 @@
 import { OpenAI } from "openai";
+import { createProxyFetch, maskProxyUrl } from "../utils/proxy-fetch.mjs";
 
 /**
  * Pool of OpenAI clients keyed by API key.
  * Reuses existing client instances to avoid repeated SDK initialisation.
  */
 export class ClientPool {
-  constructor({ baseURL, timeoutMs, userAgent }) {
+  constructor({ baseURL, timeoutMs, userAgent, upstreamProxyUrl, logger }) {
     this.baseURL = baseURL;
     this.timeoutMs = timeoutMs;
     this.userAgent = userAgent;
+    this.upstreamProxyUrl = upstreamProxyUrl;
+    this.logger = logger || console;
+    this.fetch = createProxyFetch(upstreamProxyUrl);
     this._clients = new Map();
   }
 
@@ -27,10 +31,19 @@ export class ClientPool {
         apiKey,
         baseURL: this.baseURL,
         timeout: this.timeoutMs,
+        ...(this.fetch ? { fetch: this.fetch } : {}),
         defaultHeaders: {
           "User-Agent": this.userAgent,
         },
       });
+      if (this.fetch) {
+        this.logger.log(JSON.stringify({
+          openai_client: {
+            event: "using_upstream_proxy",
+            proxy_url: maskProxyUrl(this.upstreamProxyUrl),
+          },
+        }));
+      }
       this._clients.set(apiKey, client);
     }
     return client;
@@ -38,5 +51,11 @@ export class ClientPool {
 
   get size() {
     return this._clients.size;
+  }
+
+  setUpstreamProxyUrl(upstreamProxyUrl) {
+    this.upstreamProxyUrl = upstreamProxyUrl;
+    this.fetch = createProxyFetch(upstreamProxyUrl);
+    this._clients.clear();
   }
 }

@@ -166,7 +166,7 @@ def render_config(
     each model uses keys for its provider. The legacy *api_key*/*api_keys*
     parameters are treated as OpenAI keys for backward compatibility.
     """
-    if not model_specs:
+    if model_specs is None:
         raise ValueError("No model specifications provided")
 
     # Build per-provider key sets
@@ -180,6 +180,8 @@ def render_config(
             pkeys[PROVIDER_OPENAI] = [api_key]
 
     lines = ["model_list:"]
+    if not model_specs:
+        lines[0] = "model_list: []"
     global_defaults: Dict[str, Any] = {
         "upstream_base": global_upstream_base,
         "api_key": None,

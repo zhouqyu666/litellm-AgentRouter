@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
 Configuration parsing functionality for LiteLLM proxy launcher.
+
+Supports two backends:
+  - env  (legacy): read MODEL_<KEY>_* and *_API_KEY* from environment
+  - db   (default): read from SQLite via ConfigStore
+
+The active backend is controlled by CONFIG_BACKEND env var (default: "db").
 """
 
 from __future__ import annotations
@@ -8,12 +14,23 @@ from __future__ import annotations
 import os
 import re
 import sys
-from typing import List, Mapping
+from typing import Any, Dict, List, Mapping, Optional
 
 from .models import ModelSpec, PROVIDER_OPENAI, PROVIDER_ANTHROPIC
 
 MODEL_ENV_PATTERN = re.compile(r"^MODEL_([A-Z0-9_]+)_UPSTREAM_MODEL$")
 _proxy_warning_emitted = False
+
+
+def _use_db_backend() -> bool:
+    """Return True when the db backend is active."""
+    return os.getenv("CONFIG_BACKEND", "db").lower() != "env"
+
+
+def _get_config_store():
+    """Lazy-import ConfigStore to avoid circular imports."""
+    from src.admin.config_store import get_config_store
+    return get_config_store()
 
 
 def parse_model_spec(spec_str: str) -> ModelSpec:
@@ -175,6 +192,139 @@ def _collect_provider_api_keys(
     return result
 
 
+# ---------------------------------------------------------------------------
+# DB-backed loading (default since CONFIG_BACKEND=db)
+# ---------------------------------------------------------------------------
+
+
+def load_model_specs_from_db() -> List[ModelSpec]:
+    """Load model specifications from ConfigStore (SQLite)."""
+    store = _get_config_store()
+    models = store.get_all_models()
+
+    if not models:
+        return []
+
+    return [
+        ModelSpec(
+            key=m["key"].lower(),
+            alias=None,
+            upstream_model=m["upstream_model"],
+            upstream_base=m.get("upstream_base"),
+            reasoning_effort=m.get("reasoning_effort"),
+            provider=m.get("provider"),
+            api_key=None,
+        )
+        for m in models
+    ]
+
+
+def _collect_provider_api_keys_from_db() -> dict[str, list[str]]:
+    """Collect API keys from ConfigStore (SQLite)."""
+    store = _get_config_store()
+    all_keys = store.get_all_provider_keys()
+
+    result: dict[str, list[str]] = {}
+    for provider in (PROVIDER_OPENAI, PROVIDER_ANTHROPIC):
+        keys = all_keys.get(provider, [])
+        if keys:
+            result[provider] = keys
+
+    # Fallback: use OpenAI keys for Anthropic when no Anthropic keys are set
+    if PROVIDER_ANTHROPIC not in result and PROVIDER_OPENAI in result:
+        result[PROVIDER_ANTHROPIC] = list(result[PROVIDER_OPENAI])
+
+    return result
+
+
+def sync_db_to_environ() -> None:
+    """Sync model and key data from DB into os.environ so downstream code
+    that reads from os.environ still works."""
+    store = _get_config_store()
+    for k, v in store.build_model_env_vars().items():
+        os.environ[k] = v
+    for k, v in store.build_key_env_vars().items():
+        os.environ[k] = v
+    for k, v in store.build_setting_env_vars().items():
+        os.environ[k] = v
+
+
+def auto_migrate_from_env_if_db_empty() -> Optional[dict[str, Any]]:
+    """If DB has no models, try to migrate from .env.
+
+    Returns migration summary dict or None if no migration happened.
+    """
+    store = _get_config_store()
+    from .config import RuntimeConfig
+
+    # Create a minimal config loader that reads .env
+    loader = RuntimeConfig()
+    loader.ensure_loaded()
+    env_data = dict(os.environ)
+    summary: dict[str, Any] = {"models": 0, "keys": 0, "settings": 0}
+
+    existing = store.get_all_models()
+    if existing:
+        for setting_key in (
+            "ADMIN_USERNAME",
+            "ADMIN_PASSWORD",
+            "LITELLM_MASTER_KEY",
+            "UPSTREAM_PROXY_URL",
+        ):
+            value = env_data.get(setting_key)
+            if value and not store.get_setting(setting_key):
+                store.set_setting(setting_key, value)
+                summary["settings"] += 1
+        return summary if summary["settings"] else None
+
+    # Check if .env has any model definitions
+    if not discover_model_keys(env_data):
+        for setting_key in (
+            "ADMIN_USERNAME",
+            "ADMIN_PASSWORD",
+            "LITELLM_MASTER_KEY",
+            "UPSTREAM_PROXY_URL",
+        ):
+            value = env_data.get(setting_key)
+            if value and not store.get_setting(setting_key):
+                store.set_setting(setting_key, value)
+                summary["settings"] += 1
+        return summary if summary["settings"] else None
+
+    summary = store.migrate_from_env(env_data)
+    return summary
+
+
+# ---------------------------------------------------------------------------
+# Unified loading (sources based on CONFIG_BACKEND)
+# ---------------------------------------------------------------------------
+
+
+def load_model_specs(env: Mapping[str, str] | None = None) -> List[ModelSpec]:
+    """Load model specs from the active backend (db or env)."""
+    if _use_db_backend():
+        return load_model_specs_from_db()
+    return load_model_specs_from_env(env)
+
+
+def collect_provider_api_keys(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, list[str]]:
+    """Collect API keys from the active backend (db or env)."""
+    if _use_db_backend():
+        return _collect_provider_api_keys_from_db()
+    return _collect_provider_api_keys(env)
+
+
+def get_runtime_setting(key: str, default: str | None = None) -> str | None:
+    """Get a runtime setting from SQLite in DB mode, then environment."""
+    if _use_db_backend():
+        value = _get_config_store().get_setting(key)
+        if value:
+            return value
+    return os.environ.get(key, default)
+
+
 def prepare_config(args) -> tuple[str, bool]:
     """Prepare configuration from args, returning (config_text, is_generated).
 
@@ -198,41 +348,35 @@ def prepare_config(args) -> tuple[str, bool]:
 
         return config_path, False
 
-    # Otherwise generate config from model specs or environment
+    # Otherwise generate config from model specs or active backend
     model_specs = getattr(args, 'model_specs', None)
 
     if not model_specs:
-        # Try loading from environment
         try:
-            model_specs = load_model_specs_from_env()
-            # Store model specs back into args for consistency
+            model_specs = load_model_specs()
             setattr(args, 'model_specs', model_specs)
         except ValueError as e:
             print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
 
     # Get configuration parameters from args with defaults
-    # If a custom upstream_base is provided via CLI, use it directly (disable Node proxy routing)
     custom_upstream_base = getattr(args, 'upstream_base', None)
     node_proxy_base = None
     if custom_upstream_base:
         global_upstream_base = custom_upstream_base
     else:
-        # Otherwise, check if Node proxy is enabled (default: True)
         node_proxy_enabled = getattr(args, "node_upstream_proxy_enabled", True)
         if node_proxy_enabled:
-            global_upstream_base = "http://127.0.0.1:4000/v1"  # Node proxy always uses port 4000
-            # Anthropic api_base uses the proxy without /v1 suffix
-            # (LiteLLM's Anthropic provider appends /v1/messages itself)
+            global_upstream_base = "http://127.0.0.1:4000/v1"
             node_proxy_base = "http://127.0.0.1:4000"
         else:
             global_upstream_base = "https://agentrouter.org/v1"
-    master_key = None if getattr(args, 'no_master_key', False) else getattr(args, 'master_key', None) or os.environ.get("LITELLM_MASTER_KEY", "sk-local-master")
+    master_key = None if getattr(args, 'no_master_key', False) else getattr(args, 'master_key', None) or get_runtime_setting("LITELLM_MASTER_KEY", "sk-local-master")
     drop_params = getattr(args, 'drop_params', True)
     streaming = getattr(args, 'streaming', True)
 
-    # Collect API keys for all providers
-    provider_api_keys = _collect_provider_api_keys()
+    # Collect API keys from active backend
+    provider_api_keys = collect_provider_api_keys()
 
     # Generate configuration
     config_text = render_config(

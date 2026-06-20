@@ -90,9 +90,12 @@ class TestStreamingResponseFlow:
             return mock_response
 
         with patch("time.perf_counter") as mock_time:
-            mock_time.side_effect = [0.0, 0.200]
+            mock_time.side_effect = [0.0, 1.250]
             result = await self.middleware.dispatch(request, call_next)
 
         assert result is not None
         events = self.in_memory.get_events()
         assert len(events) >= 2, "Should have RequestReceived and ResponseCompleted (or more)"
+        completion_event = next(e for e in events if e.get("event_type") == "ResponseCompleted")
+        assert completion_event["duration_s"] == 1.25
+        assert completion_event["missing_usage"] is False

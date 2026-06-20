@@ -27,6 +27,12 @@ services:
       - .env
     environment:
       ADMIN_PROXY_BASE_URL: http://127.0.0.1:4000
+      ADMIN_NODE_PROXY_BASE_URL: http://node-proxy:4000
+      CONFIG_BACKEND: db
+      CONFIG_DB_PATH: /app/data/config.sqlite3
+      TELEMETRY_DB_PATH: /app/data/telemetry.sqlite3
+    volumes:
+      - ./data:/app/data
     restart: unless-stopped
     depends_on:
       node-proxy:

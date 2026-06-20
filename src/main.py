@@ -13,6 +13,8 @@ from pathlib import Path
 from .cli import parse_args
 from .config.config import runtime_config
 from .config.parsing import prepare_config
+from .config.parsing import auto_migrate_from_env_if_db_empty
+from .config.parsing import sync_db_to_environ
 from .utils import (
     attach_signal_handlers,
     create_temp_config_if_needed,
@@ -87,6 +89,12 @@ def main(argv: list[str] | None = None) -> NoReturn:
     register_node_proxy_cleanup()
     args = parse_args(argv)
     attach_signal_handlers()
+
+    if not args.config and os.getenv("CONFIG_BACKEND", "db").lower() != "env":
+        migration_summary = auto_migrate_from_env_if_db_empty()
+        if migration_summary:
+            print(f"Migrated config from .env to SQLite: {migration_summary}")
+        sync_db_to_environ()
 
     # Start Node upstream proxy if needed (before prepare_config which uses it)
     node_process = None
