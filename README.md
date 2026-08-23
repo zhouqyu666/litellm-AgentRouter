@@ -75,6 +75,8 @@ LiteLLM AgentRouter 是一个双层代理系统，为 agentrouter.org 等上游 
 - 或 Python 3.8+ 和 Node.js 20+（源码部署）
 - 至少一个 agentrouter.org 的 API Key（推荐启动后在管理端添加）
 
+Linux 服务器最小部署见 [`DEPLOY.md`](DEPLOY.md)（`docker-compose.linux.yml` + `.env.linux.example`）。
+
 ### Docker Compose 部署（推荐）
 
 ```bash
@@ -306,7 +308,7 @@ OPENAI_API_KEY=sk-key1,sk-key2,sk-key3
 
 #### 多模型配置
 
-**DB 模式（推荐）**: 在管理端“模型管理”页面新增/编辑模型，数据写入 SQLite 后自动触发 LiteLLM 热重载。
+**DB 模式（推荐）**: 在管理端“模型管理”页面新增/编辑模型，数据写入 SQLite 后立即替换进程内 LiteLLM 路由表，`/v1/models` 无需重启即可看到新模型。若列表未更新，可在管理端点击“重载配置”。
 
 **env 模式（旧版）**: 通过 `MODEL_<KEY>_*` 环境变量声明模型，自动发现并加载（按字母顺序排序）：
 
@@ -832,7 +834,7 @@ Docker 内部不存在此问题（`entrypoint.py` 固定 LiteLLM 使用 `4000`�
 
 欢迎加入技术交流群，分享你的使用心得和建议：
 
-![微信群二维码](https://mypicture-1258720957.cos.ap-nanjing.myqcloud.com/20260816111816_32_76.jpg)
+![微信群二维码](https://mypicture-1258720957.cos.ap-nanjing.myqcloud.com/20260823154904_42_76.jpg)
 
 ---
 
