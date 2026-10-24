@@ -834,7 +834,7 @@ Docker 内部不存在此问题（`entrypoint.py` 固定 LiteLLM 使用 `4000`�
 
 欢迎加入技术交流群，分享你的使用心得和建议：
 
-![微信群二维码](https://mypicture-1258720957.cos.ap-nanjing.myqcloud.com/Obsidian/d51aa2bf-8da0-4368-8ba7-de256fafa2ac.jpg)
+![微信群二维码](https://mypicture-1258720957.cos.ap-nanjing.myqcloud.com/Obsidian/image-20261024100147846.png)
 
 ---
 
